@@ -116,8 +116,8 @@ select
     coalesce(os.purchases_last_30_days, 0) as purchases_last_30_days,
     coalesce(os.purchases_last_60_days, 0) as purchases_last_60_days,
     coalesce(max(rv.total_yes_votes), 0) as total_yes_votes,
-    max(rv.converted) filter (where rv.vote_rank = 1) as last_vote_converted,
-    max(rv.converted) filter (where rv.vote_rank = 2) as n_2_vote_converted
+    bool_or(rv.converted) filter (where rv.vote_rank = 1) as last_vote_converted,
+    bool_or(rv.converted) filter (where rv.vote_rank = 2) as n_2_vote_converted
 from unnest(phone_numbers) as input_mobile(mobile)
 left join order_summary os on os.mobile = input_mobile.mobile
 left join ranked_votes rv on rv.mobile = input_mobile.mobile
@@ -128,4 +128,3 @@ group by
     os.purchases_last_30_days,
     os.purchases_last_60_days;
 $$;
-

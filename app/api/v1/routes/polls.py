@@ -1,8 +1,9 @@
 import logging
 import secrets
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Security, UploadFile
+from fastapi.responses import JSONResponse, Response
+from fastapi.security import APIKeyHeader
 
 from app.core.config import Settings, get_settings
 from app.repositories.supabase_poll_repository import SupabasePollRepository
@@ -13,6 +14,11 @@ Logger = logging.getLogger
 logger = Logger(__name__)
 
 router = APIRouter(prefix="/polls", tags=["polls"])
+api_key_header = APIKeyHeader(
+    name="x-api-key",
+    auto_error=False,
+    description="API key required to score WhatsApp poll CSV uploads.",
+)
 
 
 def get_poll_repository(
@@ -28,7 +34,7 @@ def get_poll_scoring_service(
 
 
 def require_api_key(
-    x_api_key: str | None = Header(default=None),
+    x_api_key: str | None = Security(api_key_header),
     settings: Settings = Depends(get_settings),
 ) -> None:
     if not settings.api_key:
@@ -47,17 +53,18 @@ def require_api_key(
 @router.post(
     "/score",
     responses={
-        200: {"content": {"text/csv": {}}},
+        200: {"content": {"application/json": {}}},
         400: {"description": "Invalid CSV upload or filename."},
         401: {"description": "Missing or invalid x-api-key header."},
     },
 )
 async def score_poll_csv(
     file: UploadFile = File(...),
+    threshold: float = Query(..., description="Prediction score threshold (0–100). Rows with prediction_percentage >= threshold are counted."),
     _: None = Depends(require_api_key),
     service: PollScoringService = Depends(get_poll_scoring_service),
 ) -> Response:
-    logger.info("Received poll scoring request filename=%s", file.filename)
+    logger.info("Received poll scoring request filename=%s threshold=%s", file.filename, threshold)
     csv_bytes = await file.read()
     logger.info(
         "Read uploaded poll CSV filename=%s bytes=%s",
@@ -66,7 +73,7 @@ async def score_poll_csv(
     )
 
     try:
-        scored_csv = await service.score_csv(csv_bytes, file.filename)
+        result = await service.score_csv(csv_bytes, file.filename, threshold)
     except CsvParseError as exc:
         logger.warning(
             "Poll scoring request rejected filename=%s reason=%s",
@@ -77,17 +84,18 @@ async def score_poll_csv(
 
     output_filename = _result_filename(file.filename)
     logger.info(
-        "Poll scoring request completed filename=%s output_filename=%s bytes=%s",
+        "Poll scoring request completed filename=%s output_filename=%s bytes=%s above_threshold=%s",
         file.filename,
         output_filename,
-        len(scored_csv.encode("utf-8")),
+        len(result.csv.encode("utf-8")),
+        result.above_threshold_count,
     )
-    return Response(
-        content=scored_csv,
-        media_type="text/csv",
-        headers={
-            "Content-Disposition": f'attachment; filename="{output_filename}"',
-        },
+    return JSONResponse(
+        content={
+            "above_threshold_count": result.above_threshold_count,
+            "filename": output_filename,
+            "csv": result.csv,
+        }
     )
 
 

@@ -1,6 +1,7 @@
 import csv
 import io
 import logging
+from dataclasses import dataclass
 
 from app.models.poll import PollPredictionRecord, UserHistory
 from app.repositories.supabase_poll_repository import SupabasePollRepository
@@ -23,11 +24,17 @@ Logger = logging.getLogger
 logger = Logger(__name__)
 
 
+@dataclass
+class ScoringResult:
+    csv: str
+    above_threshold_count: int
+
+
 class PollScoringService:
     def __init__(self, repository: SupabasePollRepository) -> None:
         self._repository = repository
 
-    async def score_csv(self, csv_bytes: bytes, filename: str | None) -> str:
+    async def score_csv(self, csv_bytes: bytes, filename: str | None, threshold: float) -> ScoringResult:
         logger.info("Starting poll scoring pipeline filename=%s", filename)
         metadata = parse_metadata_from_filename(filename)
         rows = parse_whatsapp_poll_csv(csv_bytes)
@@ -86,13 +93,24 @@ class PollScoringService:
         await self._repository.insert_predictions(prediction_records)
         logger.info("Inserted poll prediction records filename=%s", filename)
 
+        above_threshold_count = sum(
+            1 for row in rows
+            if row.prediction_percentage is not None and row.prediction_percentage >= threshold
+        )
+        logger.info(
+            "Computed above-threshold count filename=%s threshold=%s count=%s",
+            filename,
+            threshold,
+            above_threshold_count,
+        )
+
         output_csv = _render_output_csv(rows, metadata.product_name, metadata.poll_date.isoformat())
         logger.info(
             "Rendered output CSV filename=%s output_bytes=%s",
             filename,
             len(output_csv.encode("utf-8")),
         )
-        return output_csv
+        return ScoringResult(csv=output_csv, above_threshold_count=above_threshold_count)
 
 
 def _render_output_csv(rows: list, product_name: str, poll_date: str) -> str:
