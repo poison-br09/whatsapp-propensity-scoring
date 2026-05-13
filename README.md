@@ -1,85 +1,56 @@
 # WhatsApp Propensity Scoring API
 
-FastAPI service for scoring WhatsApp poll CSV exports. A user uploads a WhatsApp poll CSV, waits for the request to finish, and receives a scored CSV directly.
+FastAPI service for two related jobs:
+- score uploaded WhatsApp poll CSV exports
+- ingest live WhatsApp polls and poll votes through an embedded Baileys bridge
 
-The API:
-
-- Parses WhatsApp poll exports.
-- Ignores rows where `Name` is not a valid phone number.
-- Scores valid `Yes` voters using Supabase purchase/poll history.
-- Stores valid phone rows in `poll_prediction`.
-- Returns all input rows in the output CSV with vote, prediction, and ignored reason.
-
-## 1. Requirements
+## Requirements
 
 - Python 3.11+
+- Node 20+
 - Supabase project access
-- Docker and Docker Compose, if running containerized
 
-## 2. Environment Setup
+## Environment Setup
 
-Create a local `.env` file:
+Create `.env` from `.env.example` and fill the values.
 
-```bash
-cp .env.example .env
-```
+Important live-ingestion settings:
+- `WHATSAPP_BRIDGE_ENABLED=true` to let FastAPI spawn the JS bridge
+- `WHATSAPP_GROUP_JID` for the target group
+- `WHATSAPP_INTERNAL_TOKEN` shared by FastAPI and the bridge
+- `BAILEYS_PROJECT_DIR` defaults to `PP/whatsapp_bridge`
 
-Fill these values:
+## Supabase Setup
 
-```env
-API_KEY=replace-with-a-strong-api-key
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-SUPABASE_POLL_HISTORY_RPC=get_poll_user_history
-```
+Run these migrations in order:
+- `001_create_poll_prediction.sql`
+- `002_create_get_poll_user_history_rpc.sql`
+- `003_create_whatsapp_poll_vote_event.sql`
+- `004_add_poll_prediction_source_mobile_unique.sql`
+- `005_create_whatsapp_poll.sql`
+- `006_alter_whatsapp_poll_vote_event_add_normalized_vote.sql`
+- `007_create_whatsapp_poll_vote_snapshot.sql`
 
-Where:
+The live-ingestion schema is:
+- `whatsapp_poll`: raw poll definitions
+- `whatsapp_poll_vote_event`: immutable raw vote events
+- `whatsapp_poll_vote_snapshot`: latest vote per `poll_message_id + voter_jid`
+- `poll_prediction`: scoring projection for polls whose options map cleanly to a positive/negative pair
 
-- `API_KEY`: secret value clients must send as the `x-api-key` header.
-- `SUPABASE_URL`: Supabase Project URL from Project Settings > API.
-- `SUPABASE_SERVICE_ROLE_KEY`: Supabase `service_role` key from Project Settings > API.
-- `SUPABASE_POLL_HISTORY_RPC`: Supabase RPC function name. Keep `get_poll_user_history` unless you rename the SQL function.
+## Local Run
 
-## 3. Supabase Setup
-
-Run these SQL files in Supabase SQL Editor, in this order:
-
-```text
-supabase/migrations/001_create_poll_prediction.sql
-supabase/migrations/002_create_get_poll_user_history_rpc.sql
-```
-
-`001_create_poll_prediction.sql` creates `public.poll_prediction`, where the API stores valid phone poll rows and prediction scores.
-
-`002_create_get_poll_user_history_rpc.sql` creates `public.get_poll_user_history(phone_numbers text[])`, which returns purchase/poll history for scoring.
-
-The RPC expects these production tables and columns to exist:
-
-```text
-"Auth".id
-"Auth".mobile
-"User".id
-"User"."authId"
-"LPoolOrder".id
-"LPoolOrder"."userId"
-"LPoolOrder"."createdAt"
-"LPoolOrder"."paymentStatus"
-"LPoolOrder"."settlementStatus"
-"LPoolOrder"."exceptionType"
-public.poll_prediction.mobile
-public.poll_prediction.poll_date
-public.poll_prediction.vote
-public.poll_prediction.created_at
-```
-
-If your production schema differs, update `002_create_get_poll_user_history_rpc.sql` before running it.
-
-## 4. Run Locally
-
-Install dependencies into the existing virtualenv:
+Install Python deps:
 
 ```bash
 ppvenv/bin/pip install -e ".[dev]"
+```
+
+Install bridge deps:
+
+```bash
+cd whatsapp_bridge
+npm install
+cd ..
 ```
 
 Start the API:
@@ -88,124 +59,14 @@ Start the API:
 ppvenv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Open docs:
+When `WHATSAPP_BRIDGE_ENABLED=true`, FastAPI will spawn the bridge automatically.
 
-```text
-http://127.0.0.1:8000/docs
-```
+## Pairing
 
-## 5. Run With Docker
+The first bridge run will create auth state in `whatsapp_bridge/baileys_auth_info`. Keep that directory safe.
 
-Build the image:
+## Notes
 
-```bash
-docker compose build
-```
-
-Start the API:
-
-```bash
-docker compose up
-```
-
-Run in the background:
-
-```bash
-docker compose up -d
-```
-
-Stop:
-
-```bash
-docker compose down
-```
-
-The API will be available at:
-
-```text
-http://127.0.0.1:8000
-```
-
-## 6. API Usage
-
-Endpoint:
-
-```text
-POST /api/v1/polls/score
-```
-
-Headers:
-
-```text
-x-api-key: your-api-key
-```
-
-Multipart form field:
-
-```text
-file: WhatsApp poll CSV
-```
-
-The filename must end with a date in `YYYY-MM-DD` format:
-
-```text
-pintola-peanut-butter-1kg-dark-chocolate-crunchy-2026-05-03.csv
-```
-
-Example:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/api/v1/polls/score" \
-  -H "x-api-key: $API_KEY" \
-  -F "file=@pintola-peanut-butter-1kg-dark-chocolate-crunchy-2026-05-03.csv" \
-  --output scored-poll.csv
-```
-
-Output CSV columns:
-
-```text
-raw_name
-mobile
-vote
-prediction_percentage
-product_name
-poll_date
-ignored_reason
-```
-
-## 7. Tests
-
-The local machine has system pytest plugins that can interfere with this project, so run:
-
-```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ppvenv/bin/python -m pytest
-```
-
-Expected result:
-
-```text
-12 passed
-```
-
-## 8. Logs
-
-The app logs everything from `DEBUG` and above:
-
-```text
-DEBUG
-INFO
-WARNING
-ERROR
-```
-
-Logs show the main checkpoints:
-
-- API request received
-- file read
-- metadata parsed
-- CSV row counts
-- Supabase RPC call
-- scoring applied
-- predictions inserted
-- output CSV rendered
-
+- All polls are stored generically.
+- Only polls with a recognizable binary intent pair are projected into scoring.
+- Later vote changes overwrite the latest snapshot, while raw events are still retained.
