@@ -15,6 +15,7 @@ import makeWASocket, {
     type WAMessage,
     type WAMessageContent,
     type WAMessageKey,
+    type WAMessageUpdate,
 } from '@whiskeysockets/baileys'
 
 const bridgeLogLevel = process.env.LOG_LEVEL ?? 'info'
@@ -106,7 +107,7 @@ const cachePollCreationMessage = (message: WAMessage) => {
 }
 
 const getMessage = async (key: WAMessageKey): Promise<WAMessageContent | undefined> => {
-    return pollStore.get(pollKey(key))?.message
+    return pollStore.get(pollKey(key))?.message ?? undefined
 }
 
 const normalizeVoterPhone = (jid: string) => {
@@ -195,7 +196,7 @@ const syncPollCreationMessage = async (message: WAMessage) => {
     logger.info({ pollMessageId: message.key.id, pollTitle: getPollTitle(message.message) }, 'synced poll creation to Python service')
 }
 
-const processPollUpdates = async (updates: { key: WAMessageKey; update: { pollUpdates?: proto.IPollUpdate[] } }[]) => {
+const processPollUpdates = async (updates: WAMessageUpdate[]) => {
     for (const { key, update } of updates) {
         if (!isTargetGroup(key.remoteJid) || !update.pollUpdates?.length) {
             continue
