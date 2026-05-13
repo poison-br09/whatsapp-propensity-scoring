@@ -30,4 +30,4 @@ htmlcov/
 .env
 prd*
 node_modules/
-baileys_*
+baileys_auth_info/
