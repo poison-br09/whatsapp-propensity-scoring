@@ -1,4 +1,5 @@
 import { Boom } from '@hapi/boom'
+import { writeFile } from 'node:fs/promises'
 import P from 'pino'
 import makeWASocket, {
     DEFAULT_CONNECTION_CONFIG,
@@ -38,10 +39,7 @@ const pythonInternalToken = process.env.PYTHON_INTERNAL_TOKEN
 const authDir = process.env.AUTH_DIR ?? 'baileys_auth_info'
 const usePairingCode = process.env.USE_PAIRING_CODE === 'true'
 const phoneNumber = process.env.PHONE_NUMBER?.trim()
-
-if (!targetGroupJidEnv && !targetGroupNameEnv) {
-    throw new Error('Either TARGET_GROUP_JID or TARGET_GROUP_NAME is required')
-}
+const pairingCodeOutputPath = process.env.PAIRING_CODE_OUTPUT_PATH?.trim()
 
 if (usePairingCode && !phoneNumber) {
     throw new Error('PHONE_NUMBER is required when USE_PAIRING_CODE=true')
@@ -60,7 +58,18 @@ let targetGroupJid = targetGroupJidEnv || ''
 let pairingCodeRequested = false
 
 const pollKey = (key: WAMessageKey) => `${key.remoteJid ?? ''}:${key.id ?? ''}`
-const isTargetGroup = (jid: string | null | undefined) => !!jid && !!targetGroupJid && jid === targetGroupJid
+const isGroupJid = (jid: string | null | undefined) => !!jid && jid.endsWith('@g.us')
+const isTargetGroup = (jid: string | null | undefined) => {
+    if (!isGroupJid(jid)) {
+        return false
+    }
+
+    if (!targetGroupJid) {
+        return true
+    }
+
+    return jid === targetGroupJid
+}
 
 const isPollCreationMessage = (message: WAMessage['message']) =>
     !!(
@@ -160,6 +169,7 @@ const resolveTargetGroupJid = async (sock: ReturnType<typeof makeWASocket>) => {
     }
 
     if (!targetGroupNameEnv) {
+        logger.info('no target group configured, processing polls from all WhatsApp groups')
         return ''
     }
 
@@ -185,7 +195,7 @@ const syncPollCreationMessage = async (message: WAMessage) => {
     }
 
     await postInternal('/internal/whatsapp/poll-created', {
-        group_jid: targetGroupJid,
+        group_jid: message.key.remoteJid,
         poll_message_id: message.key.id,
         poll_title: getPollTitle(message.message),
         poll_options: getPollOptions(message.message).map(option => option.optionName || ''),
@@ -229,7 +239,7 @@ const processPollUpdates = async (updates: WAMessageUpdate[]) => {
 
             await postInternal('/internal/whatsapp/poll-vote', {
                 dedupe_key: dedupeKey,
-                group_jid: targetGroupJid,
+                group_jid: key.remoteJid,
                 poll_message_id: key.id,
                 poll_title: getPollTitle(pollCreationMessage.message),
                 poll_options: getPollOptions(pollCreationMessage.message).map(option => option.optionName || ''),
@@ -254,7 +264,17 @@ const processPollUpdates = async (updates: WAMessageUpdate[]) => {
 const startSock = async () => {
     const { state, saveCreds } = await useMultiFileAuthState(authDir)
     const { version, isLatest } = await fetchLatestBaileysVersion()
-    logger.info({ version: version.join('.'), isLatest, targetGroupJid, targetGroupNameEnv, usePairingCode }, 'starting poll bridge')
+    logger.info(
+        {
+            version: version.join('.'),
+            isLatest,
+            targetGroupJid,
+            targetGroupNameEnv,
+            processAllGroups: !targetGroupJidEnv && !targetGroupNameEnv,
+            usePairingCode,
+        },
+        'starting poll bridge'
+    )
 
     const sock = makeWASocket({
         version,
@@ -277,6 +297,17 @@ const startSock = async () => {
                 pairingCodeRequested = true
                 const code = await sock.requestPairingCode(phoneNumber)
                 logger.info({ phoneNumber, code }, 'WhatsApp pairing code generated')
+                if (pairingCodeOutputPath) {
+                    await writeFile(
+                        pairingCodeOutputPath,
+                        JSON.stringify({
+                            phoneNumber,
+                            code,
+                            generatedAt: new Date().toISOString(),
+                        }),
+                        'utf-8'
+                    )
+                }
             }
 
             if (update.connection === 'open') {

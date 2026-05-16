@@ -37,6 +37,16 @@ class WhatsAppPollVoteWebhookResponse(BaseModel):
     prediction_upserted: bool = False
 
 
+class WhatsAppPairingRequest(BaseModel):
+    phone_number: str = Field(min_length=6)
+
+
+class WhatsAppPairingResponse(BaseModel):
+    phone_number: str
+    pairing_code: str
+    status: str = 'pairing_code_generated'
+
+
 @dataclass(slots=True)
 class WhatsAppPollRecord:
     group_jid: str

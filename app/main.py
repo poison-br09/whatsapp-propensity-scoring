@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from app.api.internal.routes.whatsapp import router as whatsapp_router
 from app.api.v1.routes.polls import router as polls_router
+from app.api.v1.routes.whatsapp import router as whatsapp_management_router
 from app.core.config import get_settings
 from app.core.logging_setup import configure_logging
 from app.core.whatsapp_bridge import BaileysBridgeProcessManager
@@ -14,9 +15,10 @@ logger = Logger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     settings = get_settings()
     bridge_manager = BaileysBridgeProcessManager(settings)
+    app.state.bridge_manager = bridge_manager
     bridge_manager.start()
     try:
         yield
@@ -35,6 +37,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(polls_router, prefix='/api/v1')
+    app.include_router(whatsapp_management_router, prefix='/api/v1')
     app.include_router(whatsapp_router)
     logger.info('Registered API routers')
     return app
