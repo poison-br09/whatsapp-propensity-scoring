@@ -16,6 +16,7 @@ import makeWASocket, {
     useMultiFileAuthState,
     type ConnectionState,
     type GroupMetadata,
+    type SignalKeyStore,
     type WAMessage,
     type WAMessageContent,
     type WAMessageKey,
@@ -63,9 +64,7 @@ let targetGroupJid = targetGroupJidEnv || ''
 let pairingCodeRequested = false
 let ownPnJid = ''
 let ownLidJid = ''
-let authStateKeys: {
-    get: (type: string, ids: string[]) => Promise<Record<string, string | undefined>>
-} | null = null
+let authStateKeys: SignalKeyStore | null = null
 
 const pollKey = (key: WAMessageKey) => `${key.remoteJid ?? ''}:${key.id ?? ''}`
 const isGroupJid = (jid: string | null | undefined) => !!jid && jid.endsWith('@g.us')
@@ -189,6 +188,9 @@ const cachePollCreationMessage = (message: WAMessage) => {
 const getMessage = async (key: WAMessageKey): Promise<WAMessageContent | undefined> => {
     return pollStore.get(pollKey(key))?.message ?? undefined
 }
+
+const getKeyParticipantAlt = (key: WAMessageKey | proto.IMessageKey | null | undefined) =>
+    (key as { participantAlt?: string } | null | undefined)?.participantAlt
 
 const normalizeVoterPhone = (jid: string | null | undefined, phoneHint?: string | null) => {
     const preferred = phoneHint ? jidNormalizedUser(phoneHint) : ''
@@ -504,7 +506,7 @@ const processPollUpdates = async (updates: WAMessageUpdate[]) => {
                 pollMessageId: key.id,
                 pollCreationMessage,
                 voterJid,
-                voterPhoneHint: pollUpdateMessageKey?.participantAlt,
+                voterPhoneHint: getKeyParticipantAlt(pollUpdateMessageKey),
                 selectedOptions,
                 timestampMs: getTimestampMs(pollUpdate.senderTimestampMs, Date.now()),
                 sourceMessageId: pollUpdateMessageKey?.id,
@@ -641,7 +643,7 @@ const processPollVoteMessages = async (messages: WAMessage[]) => {
             pollMessageId,
             pollCreationMessage,
             voterJid: resolvedVoterJid,
-            voterPhoneHint: message.key.participantAlt,
+            voterPhoneHint: getKeyParticipantAlt(message.key),
             selectedOptions: decryptedVote.selectedOptions || [],
             timestampMs: getTimestampMs(pollUpdateMessage.senderTimestampMs, getMessageTimestampMs(message)),
             sourceMessageId: message.key.id,
