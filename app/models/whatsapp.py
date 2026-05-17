@@ -47,6 +47,29 @@ class WhatsAppPairingResponse(BaseModel):
     status: str = 'pairing_code_generated'
 
 
+class WhatsAppSessionEventWebhook(BaseModel):
+    event: str
+    phone_number: str | None = None
+    status_code: int | None = None
+    occurred_at: str | None = None
+    target_group_jid: str | None = None
+    pairing_required: bool | None = None
+
+
+class WhatsAppSessionEventWebhookResponse(BaseModel):
+    accepted: bool
+    email_sent: bool = False
+
+
+class WhatsAppSessionStatusResponse(BaseModel):
+    status: str
+    phone_number: str | None = None
+    target_group_jid: str | None = None
+    last_event_at: str | None = None
+    last_disconnect_code: int | None = None
+    pairing_required: bool = False
+
+
 @dataclass(slots=True)
 class WhatsAppPollRecord:
     group_jid: str

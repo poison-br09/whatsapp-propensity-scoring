@@ -158,6 +158,28 @@ const postInternal = async (path: string, payload: Record<string, unknown>) => {
     }
 }
 
+const reportSessionEvent = async (
+    event: string,
+    payload: {
+        status_code?: number | null
+        pairing_required?: boolean
+        target_group_jid?: string | null
+    } = {}
+) => {
+    try {
+        await postInternal('/internal/whatsapp/session-event', {
+            event,
+            phone_number: phoneNumber || null,
+            status_code: payload.status_code ?? null,
+            occurred_at: new Date().toISOString(),
+            target_group_jid: payload.target_group_jid ?? (targetGroupJid || null),
+            pairing_required: payload.pairing_required ?? false,
+        })
+    } catch (error) {
+        logger.error({ err: error, event }, 'failed to report WhatsApp session event to Python service')
+    }
+}
+
 const logKnownGroups = (groups: Record<string, GroupMetadata>) => {
     const entries = Object.entries(groups).map(([jid, metadata]) => ({ jid, subject: metadata.subject }))
     logger.info({ groups: entries }, 'available WhatsApp groups for bridge selection')
@@ -275,6 +297,7 @@ const startSock = async () => {
         },
         'starting poll bridge'
     )
+    await reportSessionEvent('starting', { pairing_required: usePairingCode })
 
     const sock = makeWASocket({
         version,
@@ -297,6 +320,7 @@ const startSock = async () => {
                 pairingCodeRequested = true
                 const code = await sock.requestPairingCode(phoneNumber)
                 logger.info({ phoneNumber, code }, 'WhatsApp pairing code generated')
+                await reportSessionEvent('pairing_code_generated', { pairing_required: true })
                 if (pairingCodeOutputPath) {
                     await writeFile(
                         pairingCodeOutputPath,
@@ -312,6 +336,10 @@ const startSock = async () => {
 
             if (update.connection === 'open') {
                 await resolveTargetGroupJid(sock)
+                await reportSessionEvent('connected', {
+                    pairing_required: false,
+                    target_group_jid: targetGroupJid || null,
+                })
             }
 
             if (update.receivedPendingNotifications) {
@@ -324,8 +352,16 @@ const startSock = async () => {
                 const statusCode = (update.lastDisconnect?.error as Boom | undefined)?.output?.statusCode
                 if (statusCode !== DisconnectReason.loggedOut) {
                     logger.warn({ statusCode }, 'socket closed, reconnecting poll bridge')
+                    await reportSessionEvent('reconnecting', {
+                        status_code: statusCode ?? null,
+                        pairing_required: false,
+                    })
                     void startSock()
                 } else {
+                    await reportSessionEvent('logged_out', {
+                        status_code: statusCode ?? null,
+                        pairing_required: true,
+                    })
                     logger.fatal('poll bridge session was logged out')
                 }
             }

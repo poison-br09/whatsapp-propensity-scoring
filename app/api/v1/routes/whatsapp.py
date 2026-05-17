@@ -7,7 +7,12 @@ from fastapi.security import APIKeyHeader
 
 from app.core.config import Settings, get_settings
 from app.core.whatsapp_bridge import BaileysBridgeProcessManager
-from app.models.whatsapp import WhatsAppPairingRequest, WhatsAppPairingResponse
+from app.models.whatsapp import (
+    WhatsAppPairingRequest,
+    WhatsAppPairingResponse,
+    WhatsAppSessionStatusResponse,
+)
+from app.services.whatsapp_session_state import WhatsAppSessionStateService
 
 Logger = logging.getLogger
 logger = Logger(__name__)
@@ -46,6 +51,15 @@ def get_bridge_manager(request: Request) -> BaileysBridgeProcessManager:
     return bridge_manager
 
 
+def get_session_state_service(request: Request) -> WhatsAppSessionStateService:
+    session_state_service = getattr(request.app.state, 'whatsapp_session_state', None)
+    if session_state_service is None:
+        logger.error('WhatsApp session state service is unavailable on application state')
+        raise HTTPException(status_code=503, detail='WhatsApp session state service is unavailable.')
+
+    return session_state_service
+
+
 @router.post(
     '/pairing-code',
     response_model=WhatsAppPairingResponse,
@@ -78,3 +92,25 @@ async def request_whatsapp_pairing_code(
         phone_number=''.join(ch for ch in payload.phone_number if ch.isdigit()),
         pairing_code=pairing_code,
     )
+
+
+@router.get(
+    '/status',
+    response_model=WhatsAppSessionStatusResponse,
+    responses={
+        401: {'description': 'Missing or invalid x-api-key header.'},
+        503: {'description': 'WhatsApp session state is unavailable.'},
+    },
+)
+async def get_whatsapp_status(
+    _: None = Depends(require_api_key),
+    session_state_service: WhatsAppSessionStateService = Depends(get_session_state_service),
+) -> WhatsAppSessionStatusResponse:
+    status = session_state_service.get_status()
+    logger.info(
+        'Returned WhatsApp status status=%s pairing_required=%s target_group_jid=%s',
+        status.status,
+        status.pairing_required,
+        status.target_group_jid,
+    )
+    return status

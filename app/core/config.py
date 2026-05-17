@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     whatsapp_group_name: str | None = None
     whatsapp_use_pairing_code: bool = False
     whatsapp_phone_number: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str | None = None
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
+    whatsapp_alert_recipients: str | None = None
     app_log_dir: str = 'logs/app'
     baileys_project_dir: str = 'whatsapp_bridge'
     baileys_auth_dir: str | None = None
@@ -61,6 +69,13 @@ class Settings(BaseSettings):
     @property
     def baileys_log_path(self) -> Path:
         return self.resolve_path(self.baileys_log_dir) or self.project_root / 'logs' / 'server'
+
+    @property
+    def whatsapp_alert_recipient_list(self) -> list[str]:
+        if not self.whatsapp_alert_recipients:
+            return []
+
+        return [email.strip() for email in self.whatsapp_alert_recipients.split(',') if email.strip()]
 
 
 @lru_cache
