@@ -6,6 +6,7 @@ from app.core.config import Settings
 
 LOG_FORMAT = '%(asctime)s | %(levelname)-8s | %(name)s | %(message)s'
 UVICORN_LOGGERS = ('uvicorn', 'uvicorn.error', 'uvicorn.access')
+QUIET_LOGGERS = ('httpx', 'httpcore', 'hpack')
 LOGGER_NAME_ALIASES = {
     'uvicorn.error': 'uvicorn.lifecycle',
 }
@@ -37,7 +38,7 @@ def configure_logging(settings: Settings) -> None:
 
     root_logger = logging.getLogger()
     root_logger.handlers.clear()
-    root_logger.setLevel(logging.DEBUG)
+    root_logger.setLevel(logging.INFO)
 
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setLevel(logging.INFO)
@@ -50,5 +51,11 @@ def configure_logging(settings: Settings) -> None:
     for logger_name in UVICORN_LOGGERS:
         uvicorn_logger = logging.getLogger(logger_name)
         uvicorn_logger.handlers.clear()
-        uvicorn_logger.setLevel(logging.DEBUG)
+        uvicorn_logger.setLevel(logging.INFO)
         uvicorn_logger.propagate = True
+
+    for logger_name in QUIET_LOGGERS:
+        noisy_logger = logging.getLogger(logger_name)
+        noisy_logger.handlers.clear()
+        noisy_logger.setLevel(logging.WARNING)
+        noisy_logger.propagate = True

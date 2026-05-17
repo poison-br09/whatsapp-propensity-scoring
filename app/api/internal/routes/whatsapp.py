@@ -88,9 +88,10 @@ async def ingest_poll_vote(
     service: WhatsAppPollIngestionService = Depends(get_whatsapp_poll_ingestion_service),
 ) -> WhatsAppPollVoteWebhookResponse:
     logger.info(
-        'Received internal WhatsApp poll vote poll_message_id=%s voter_jid=%s selected_options=%s',
+        'Received internal WhatsApp poll vote poll_message_id=%s voter_jid=%s voter_phone=%s selected_options=%s',
         payload.poll_message_id,
         payload.voter_jid,
+        payload.voter_phone,
         payload.selected_options,
     )
     return await service.ingest_vote(payload)

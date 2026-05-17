@@ -7,6 +7,7 @@ import makeWASocket, {
     DisconnectReason,
     fetchLatestBaileysVersion,
     getKeyAuthor,
+    jidDecode,
     jidNormalizedUser,
     makeCacheableSignalKeyStore,
     normalizeMessageContent,
@@ -62,6 +63,9 @@ let targetGroupJid = targetGroupJidEnv || ''
 let pairingCodeRequested = false
 let ownPnJid = ''
 let ownLidJid = ''
+let authStateKeys: {
+    get: (type: string, ids: string[]) => Promise<Record<string, string | undefined>>
+} | null = null
 
 const pollKey = (key: WAMessageKey) => `${key.remoteJid ?? ''}:${key.id ?? ''}`
 const isGroupJid = (jid: string | null | undefined) => !!jid && jid.endsWith('@g.us')
@@ -186,10 +190,60 @@ const getMessage = async (key: WAMessageKey): Promise<WAMessageContent | undefin
     return pollStore.get(pollKey(key))?.message ?? undefined
 }
 
-const normalizeVoterPhone = (jid: string) => {
-    const normalized = jidNormalizedUser(jid)
+const normalizeVoterPhone = (jid: string | null | undefined, phoneHint?: string | null) => {
+    const preferred = phoneHint ? jidNormalizedUser(phoneHint) : ''
+    if (preferred.endsWith('@s.whatsapp.net') || preferred.endsWith('@c.us')) {
+        const userPart = preferred.split('@')[0] ?? ''
+        return userPart.split(':')[0] ?? ''
+    }
+
+    const normalized = jid ? jidNormalizedUser(jid) : ''
+    if (!normalized.endsWith('@s.whatsapp.net') && !normalized.endsWith('@c.us')) {
+        return null
+    }
+
     const userPart = normalized.split('@')[0] ?? ''
     return userPart.split(':')[0] ?? ''
+}
+
+const resolvePhoneHintFromLidMapping = async (jid: string | null | undefined) => {
+    if (!authStateKeys || !jid) {
+        return null
+    }
+
+    const normalized = jidNormalizedUser(jid)
+    if (!normalized.endsWith('@lid') && !normalized.endsWith('@hosted.lid')) {
+        return null
+    }
+
+    const decoded = jidDecode(normalized)
+    if (!decoded?.user) {
+        return null
+    }
+
+    const reverseKey = `${decoded.user}_reverse`
+    const stored = await authStateKeys.get('lid-mapping', [reverseKey])
+    const pnUser = stored[reverseKey]
+    if (!pnUser || typeof pnUser !== 'string') {
+        return null
+    }
+
+    const deviceSuffix = decoded.device ? `:${decoded.device}` : ''
+    return `${pnUser}${deviceSuffix}@s.whatsapp.net`
+}
+
+const resolveVoterPhone = async (voterJid: string, voterPhoneHint?: string | null) => {
+    const directPhone = normalizeVoterPhone(voterJid, voterPhoneHint)
+    if (directPhone) {
+        return directPhone
+    }
+
+    if (ownLidJid && jidNormalizedUser(voterJid) === ownLidJid) {
+        return normalizeVoterPhone(ownPnJid)
+    }
+
+    const mappedPhoneHint = await resolvePhoneHintFromLidMapping(voterJid)
+    return normalizeVoterPhone(voterJid, mappedPhoneHint)
 }
 
 const resolveSelectedOptionNames = (
@@ -265,12 +319,13 @@ const reportSessionEvent = async (
         status_code?: number | null
         pairing_required?: boolean
         target_group_jid?: string | null
+        phone_number?: string | null
     } = {}
 ) => {
     try {
         await postInternal('/internal/whatsapp/session-event', {
             event,
-            phone_number: phoneNumber || null,
+            phone_number: payload.phone_number ?? (phoneNumber || null),
             status_code: payload.status_code ?? null,
             occurred_at: new Date().toISOString(),
             target_group_jid: payload.target_group_jid ?? (targetGroupJid || null),
@@ -308,14 +363,36 @@ const resolveTargetGroupJid = async (sock: ReturnType<typeof makeWASocket>) => {
     return targetGroupJid
 }
 
-const syncPollCreationMessage = async (message: WAMessage) => {
+const syncPollCreationMessage = async (
+    message: WAMessage,
+    source: 'messages.upsert' | 'messaging-history.set'
+) => {
     if (!message.key.id || !isTargetGroup(message.key.remoteJid) || !message.message || !isPollCreationMessage(message.message)) {
         return
     }
 
     if (syncedPolls.has(message.key.id)) {
+        logger.debug(
+            {
+                source,
+                pollMessageId: message.key.id,
+                remoteJid: message.key.remoteJid,
+            },
+            'skipping already-synced poll creation message'
+        )
         return
     }
+
+    logger.info(
+        {
+            source,
+            pollMessageId: message.key.id,
+            remoteJid: message.key.remoteJid,
+            pollTitle: getPollTitle(message.message),
+            optionCount: getPollOptions(message.message).length,
+        },
+        'detected poll creation message for sync'
+    )
 
     await postInternal('/internal/whatsapp/poll-created', {
         group_jid: message.key.remoteJid,
@@ -334,6 +411,7 @@ const forwardPollVoteUpdate = async ({
     pollMessageId,
     pollCreationMessage,
     voterJid,
+    voterPhoneHint,
     selectedOptions,
     timestampMs,
     sourceMessageId,
@@ -347,6 +425,7 @@ const forwardPollVoteUpdate = async ({
     timestampMs: number
     sourceMessageId?: string | null
     source: 'messages.update' | 'messages.upsert'
+    voterPhoneHint?: string | null
 }) => {
     const selectedOptionNames = resolveSelectedOptionNames(pollCreationMessage.message, selectedOptions)
     const dedupeKey = buildVoteDedupeKey(
@@ -356,6 +435,7 @@ const forwardPollVoteUpdate = async ({
         timestampMs,
         sourceMessageId
     )
+    const voterPhone = await resolveVoterPhone(voterJid, voterPhoneHint)
 
     await postInternal('/internal/whatsapp/poll-vote', {
         dedupe_key: dedupeKey,
@@ -364,7 +444,7 @@ const forwardPollVoteUpdate = async ({
         poll_title: getPollTitle(pollCreationMessage.message),
         poll_options: getPollOptions(pollCreationMessage.message).map(option => option.optionName || ''),
         voter_jid: voterJid,
-        voter_phone: normalizeVoterPhone(voterJid),
+        voter_phone: voterPhone,
         selected_options: selectedOptionNames,
         vote_timestamp_ms: timestampMs,
     })
@@ -374,6 +454,7 @@ const forwardPollVoteUpdate = async ({
             source,
             pollMessageId,
             voterJid,
+            voterPhone,
             selectedOptionNames,
         },
         'forwarded poll vote update to Python service'
@@ -423,6 +504,7 @@ const processPollUpdates = async (updates: WAMessageUpdate[]) => {
                 pollMessageId: key.id,
                 pollCreationMessage,
                 voterJid,
+                voterPhoneHint: pollUpdateMessageKey?.participantAlt,
                 selectedOptions,
                 timestampMs: getTimestampMs(pollUpdate.senderTimestampMs, Date.now()),
                 sourceMessageId: pollUpdateMessageKey?.id,
@@ -559,6 +641,7 @@ const processPollVoteMessages = async (messages: WAMessage[]) => {
             pollMessageId,
             pollCreationMessage,
             voterJid: resolvedVoterJid,
+            voterPhoneHint: message.key.participantAlt,
             selectedOptions: decryptedVote.selectedOptions || [],
             timestampMs: getTimestampMs(pollUpdateMessage.senderTimestampMs, getMessageTimestampMs(message)),
             sourceMessageId: message.key.id,
@@ -570,6 +653,7 @@ const processPollVoteMessages = async (messages: WAMessage[]) => {
 const startSock = async () => {
     await loadPollStore()
     const { state, saveCreds } = await useMultiFileAuthState(authDir)
+    authStateKeys = state.keys
     if (state.creds.me?.id) {
         ownPnJid = jidNormalizedUser(state.creds.me.id)
     }
@@ -649,6 +733,7 @@ const startSock = async () => {
                 logger.info({ ownPnJid, ownLidJid }, 'own jids resolved on connection open')
                 await resolveTargetGroupJid(sock)
                 await reportSessionEvent('connected', {
+                    phone_number: normalizeVoterPhone(ownPnJid),
                     pairing_required: false,
                     target_group_jid: targetGroupJid || null,
                 })
@@ -684,9 +769,22 @@ const startSock = async () => {
         }
 
         if (events['messaging-history.set']) {
+            const historyPollMessages = events['messaging-history.set'].messages.filter(
+                message => isTargetGroup(message.key.remoteJid) && isPollCreationMessage(message.message)
+            )
+            if (historyPollMessages.length) {
+                logger.info(
+                    {
+                        count: historyPollMessages.length,
+                        pollMessageIds: historyPollMessages.map(message => message.key.id),
+                    },
+                    'received poll creation messages in history sync'
+                )
+            }
+
             for (const message of events['messaging-history.set'].messages) {
                 cachePollCreationMessage(message)
-                await syncPollCreationMessage(message)
+                await syncPollCreationMessage(message, 'messaging-history.set')
             }
         }
 
@@ -706,7 +804,7 @@ const startSock = async () => {
                 }
 
                 cachePollCreationMessage(message)
-                await syncPollCreationMessage(message)
+                await syncPollCreationMessage(message, 'messages.upsert')
             }
 
             await processPollVoteMessages(events['messages.upsert'].messages)
