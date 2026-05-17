@@ -1,5 +1,6 @@
 import { Boom } from '@hapi/boom'
-import { writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
 import P from 'pino'
 import makeWASocket, {
     DEFAULT_CONNECTION_CONFIG,
@@ -39,6 +40,7 @@ const targetGroupNameEnv = process.env.TARGET_GROUP_NAME?.trim()
 const pythonInternalBaseUrl = process.env.PYTHON_INTERNAL_BASE_URL ?? 'http://127.0.0.1:8000'
 const pythonInternalToken = process.env.PYTHON_INTERNAL_TOKEN
 const authDir = process.env.AUTH_DIR ?? 'baileys_auth_info'
+const pollStorePath = process.env.POLL_STORE_PATH ?? 'poll_store.json'
 const usePairingCode = process.env.USE_PAIRING_CODE === 'true'
 const phoneNumber = process.env.PHONE_NUMBER?.trim()
 const pairingCodeOutputPath = process.env.PAIRING_CODE_OUTPUT_PATH?.trim()
@@ -58,9 +60,42 @@ let liveVoteProcessingEnabled = false
 let connectionState: Partial<ConnectionState> = {}
 let targetGroupJid = targetGroupJidEnv || ''
 let pairingCodeRequested = false
+let ownPnJid = ''
+let ownLidJid = ''
 
 const pollKey = (key: WAMessageKey) => `${key.remoteJid ?? ''}:${key.id ?? ''}`
 const isGroupJid = (jid: string | null | undefined) => !!jid && jid.endsWith('@g.us')
+const uniqueJids = (...values: Array<string | null | undefined>) => {
+    const seen = new Set<string>()
+    const result: string[] = []
+
+    for (const value of values) {
+        if (!value) {
+            continue
+        }
+
+        const normalized = jidNormalizedUser(value)
+        if (!normalized || seen.has(normalized)) {
+            continue
+        }
+
+        seen.add(normalized)
+        result.push(normalized)
+    }
+
+    return result
+}
+
+const getAuthorCandidates = (
+    key: WAMessageKey | null | undefined,
+    meIds: string[] = []
+) =>
+    uniqueJids(
+        key?.participant,
+        key ? getKeyAuthor(key) : undefined,
+        ...meIds.flatMap(meId => (key ? [getKeyAuthor(key, meId)] : []))
+    )
+
 const isTargetGroup = (jid: string | null | undefined) => {
     if (!isGroupJid(jid)) {
         return false
@@ -105,6 +140,35 @@ const getMessageTimestampMs = (message: WAMessage) => {
     return Number(rawTimestamp.toString()) * 1000
 }
 
+const loadPollStore = async () => {
+    if (!existsSync(pollStorePath)) {
+        return
+    }
+    try {
+        const raw = await readFile(pollStorePath, 'utf-8')
+        const entries = JSON.parse(raw) as Array<{ k: string; v: string }>
+        for (const { k, v } of entries) {
+            const message = proto.WebMessageInfo.decode(Buffer.from(v, 'base64'))
+            pollStore.set(k, message as WAMessage)
+        }
+        logger.info({ count: pollStore.size, path: pollStorePath }, 'loaded poll store from disk')
+    } catch (error) {
+        logger.warn({ err: error, path: pollStorePath }, 'failed to load poll store from disk')
+    }
+}
+
+const savePollStore = async () => {
+    try {
+        const entries = Array.from(pollStore.entries()).map(([k, message]) => ({
+            k,
+            v: Buffer.from(proto.WebMessageInfo.encode(message).finish()).toString('base64'),
+        }))
+        await writeFile(pollStorePath, JSON.stringify(entries), 'utf-8')
+    } catch (error) {
+        logger.warn({ err: error, path: pollStorePath }, 'failed to save poll store to disk')
+    }
+}
+
 const cachePollCreationMessage = (message: WAMessage) => {
     if (!isTargetGroup(message.key.remoteJid) || !message.key.id || !isPollCreationMessage(message.message)) {
         return
@@ -115,6 +179,7 @@ const cachePollCreationMessage = (message: WAMessage) => {
         { key: message.key.id, pollTitle: getPollTitle(message.message) },
         'cached poll creation message'
     )
+    void savePollStore()
 }
 
 const getMessage = async (key: WAMessageKey): Promise<WAMessageContent | undefined> => {
@@ -142,6 +207,15 @@ const resolveSelectedOptionNames = (
     }
 
     return selectedOptions.map(option => optionMap.get(Buffer.from(option).toString()) ?? 'Unknown')
+}
+
+const describeMessageContent = (message: WAMessage['message']) => {
+    const normalized = normalizeMessageContent(message)
+    if (!normalized) {
+        return []
+    }
+
+    return Object.keys(normalized).filter(key => normalized[key as keyof typeof normalized] != null)
 }
 
 const getTimestampMs = (
@@ -361,7 +435,14 @@ const processPollUpdates = async (updates: WAMessageUpdate[]) => {
 const processPollVoteMessages = async (messages: WAMessage[]) => {
     const pollUpdateMessages = messages.filter(message => !!normalizeMessageContent(message.message)?.pollUpdateMessage)
     if (pollUpdateMessages.length) {
-        logger.info({ count: pollUpdateMessages.length }, 'received poll update messages in upsert batch')
+        logger.info(
+            {
+                count: pollUpdateMessages.length,
+                fromGroups: pollUpdateMessages.filter(m => isGroupJid(m.key.remoteJid)).length,
+                remoteJids: pollUpdateMessages.map(m => m.key.remoteJid),
+            },
+            'received poll update messages in upsert batch'
+        )
     }
 
     for (const message of messages) {
@@ -381,7 +462,7 @@ const processPollVoteMessages = async (messages: WAMessage[]) => {
         )
 
         if (!isTargetGroup(message.key.remoteJid)) {
-            logger.debug(
+            logger.warn(
                 { messageId: message.key.id, remoteJid: message.key.remoteJid },
                 'ignoring poll update message outside configured groups'
             )
@@ -415,26 +496,61 @@ const processPollVoteMessages = async (messages: WAMessage[]) => {
             continue
         }
 
-        const pollCreatorJid = getKeyAuthor(creationMsgKey)
-        const voterJid = getKeyAuthor(message.key)
-        if (!pollCreatorJid || !voterJid || !pollUpdateMessage.vote) {
+        const ownJidCandidates = uniqueJids(ownPnJid, ownLidJid)
+        const pollCreatorCandidates = getAuthorCandidates(creationMsgKey, ownJidCandidates)
+        const voterCandidates = getAuthorCandidates(message.key, ownJidCandidates)
+        if (!pollCreatorCandidates.length || !voterCandidates.length || !pollUpdateMessage.vote) {
             logger.warn(
-                { messageId: message.key.id, pollMessageId, hasVote: !!pollUpdateMessage.vote },
+                {
+                    messageId: message.key.id,
+                    pollMessageId,
+                    hasVote: !!pollUpdateMessage.vote,
+                    pollCreatorCandidates,
+                    voterCandidates,
+                },
                 'poll update message missing decrypt context'
             )
             continue
         }
 
-        let decryptedVote: proto.Message.IPollVoteMessage
-        try {
-            decryptedVote = decryptPollVote(pollUpdateMessage.vote, {
-                pollCreatorJid,
-                pollMsgId: pollMessageId,
-                pollEncKey,
-                voterJid,
-            })
-        } catch (error) {
-            logger.warn({ err: error, messageId: message.key.id, pollMessageId }, 'failed to decrypt poll update message')
+        let decryptedVote: proto.Message.IPollVoteMessage | undefined
+        let resolvedPollCreatorJid = ''
+        let resolvedVoterJid = ''
+        let lastDecryptError: unknown
+
+        for (const pollCreatorJid of pollCreatorCandidates) {
+            for (const voterJid of voterCandidates) {
+                try {
+                    decryptedVote = decryptPollVote(pollUpdateMessage.vote, {
+                        pollCreatorJid,
+                        pollMsgId: pollMessageId,
+                        pollEncKey,
+                        voterJid,
+                    })
+                    resolvedPollCreatorJid = pollCreatorJid
+                    resolvedVoterJid = voterJid
+                    break
+                } catch (error) {
+                    lastDecryptError = error
+                }
+            }
+
+            if (decryptedVote) {
+                break
+            }
+        }
+
+        if (!decryptedVote || !resolvedVoterJid) {
+            logger.warn(
+                {
+                    err: lastDecryptError,
+                    messageId: message.key.id,
+                    pollMessageId,
+                    pollCreatorCandidates,
+                    voterCandidates,
+                },
+                'failed to decrypt poll update message'
+            )
             continue
         }
 
@@ -442,7 +558,7 @@ const processPollVoteMessages = async (messages: WAMessage[]) => {
             groupJid: creationMsgKey.remoteJid,
             pollMessageId,
             pollCreationMessage,
-            voterJid,
+            voterJid: resolvedVoterJid,
             selectedOptions: decryptedVote.selectedOptions || [],
             timestampMs: getTimestampMs(pollUpdateMessage.senderTimestampMs, getMessageTimestampMs(message)),
             sourceMessageId: message.key.id,
@@ -452,7 +568,14 @@ const processPollVoteMessages = async (messages: WAMessage[]) => {
 }
 
 const startSock = async () => {
+    await loadPollStore()
     const { state, saveCreds } = await useMultiFileAuthState(authDir)
+    if (state.creds.me?.id) {
+        ownPnJid = jidNormalizedUser(state.creds.me.id)
+    }
+    if (state.creds.me?.lid) {
+        ownLidJid = jidNormalizedUser(state.creds.me.lid)
+    }
     const { version, isLatest } = await fetchLatestBaileysVersion()
     logger.info(
         {
@@ -479,6 +602,24 @@ const startSock = async () => {
         getMessage,
     })
 
+    sock.ws.on('CB:message', (node: { attrs: Record<string, string> }) => {
+        const from = node.attrs.from
+        if (!isGroupJid(from)) {
+            return
+        }
+
+        logger.info(
+            {
+                rawFrom: from,
+                rawId: node.attrs.id,
+                rawType: node.attrs.type,
+                rawParticipant: node.attrs.participant,
+                rawTimestamp: node.attrs.t,
+            },
+            'received raw group message node'
+        )
+    })
+
     sock.ev.process(async events => {
         if (events['connection.update']) {
             const update = events['connection.update']
@@ -503,6 +644,9 @@ const startSock = async () => {
             }
 
             if (update.connection === 'open') {
+                ownPnJid = sock.authState.creds.me?.id ? jidNormalizedUser(sock.authState.creds.me.id) : ownPnJid
+                ownLidJid = sock.authState.creds.me?.lid ? jidNormalizedUser(sock.authState.creds.me.lid) : ownLidJid
+                logger.info({ ownPnJid, ownLidJid }, 'own jids resolved on connection open')
                 await resolveTargetGroupJid(sock)
                 await reportSessionEvent('connected', {
                     pairing_required: false,
@@ -548,6 +692,19 @@ const startSock = async () => {
 
         if (events['messages.upsert']) {
             for (const message of events['messages.upsert'].messages) {
+                if (isTargetGroup(message.key.remoteJid)) {
+                    logger.info(
+                        {
+                            messageId: message.key.id,
+                            remoteJid: message.key.remoteJid,
+                            fromMe: message.key.fromMe,
+                            participant: message.key.participant,
+                            contentTypes: describeMessageContent(message.message),
+                        },
+                        'received group message in upsert batch'
+                    )
+                }
+
                 cachePollCreationMessage(message)
                 await syncPollCreationMessage(message)
             }
@@ -556,6 +713,18 @@ const startSock = async () => {
         }
 
         if (events['messages.update']) {
+            const groupUpdates = events['messages.update'].filter(({ key }) => isTargetGroup(key.remoteJid))
+            if (groupUpdates.length) {
+                logger.info(
+                    {
+                        total: events['messages.update'].length,
+                        groupUpdates: groupUpdates.length,
+                        withPollUpdates: groupUpdates.filter(({ update }) => !!update.pollUpdates?.length).length,
+                    },
+                    'received messages.update batch'
+                )
+            }
+
             await processPollUpdates(events['messages.update'])
         }
     })
