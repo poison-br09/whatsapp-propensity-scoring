@@ -8,6 +8,7 @@ import makeWASocket, {
     getKeyAuthor,
     jidNormalizedUser,
     makeCacheableSignalKeyStore,
+    normalizeMessageContent,
     proto,
     sha256,
     useMultiFileAuthState,
@@ -18,6 +19,7 @@ import makeWASocket, {
     type WAMessageKey,
     type WAMessageUpdate,
 } from '@whiskeysockets/baileys'
+import { decryptPollVote } from '@whiskeysockets/baileys/lib/Utils/process-message.js'
 
 const bridgeLogLevel = process.env.LOG_LEVEL ?? 'info'
 const protocolLogLevel = process.env.PROTOCOL_LOG_LEVEL ?? 'error'
@@ -142,6 +144,31 @@ const resolveSelectedOptionNames = (
     return selectedOptions.map(option => optionMap.get(Buffer.from(option).toString()) ?? 'Unknown')
 }
 
+const getTimestampMs = (
+    value: number | { toString(): string } | null | undefined,
+    fallback: number
+) => {
+    if (typeof value === 'number') {
+        return value
+    }
+
+    if (value && typeof value === 'object' && 'toString' in value) {
+        return Number(value.toString())
+    }
+
+    return fallback
+}
+
+const buildVoteDedupeKey = (
+    pollMessageId: string | null | undefined,
+    voterJid: string,
+    selectedOptionNames: string[],
+    timestampMs: number,
+    sourceMessageId?: string | null
+) =>
+    sourceMessageId ||
+    `${pollMessageId ?? 'unknown'}:${voterJid}:${timestampMs}:${selectedOptionNames.join('|')}`
+
 const postInternal = async (path: string, payload: Record<string, unknown>) => {
     const response = await fetch(`${pythonInternalBaseUrl}${path}`, {
         method: 'POST',
@@ -228,9 +255,71 @@ const syncPollCreationMessage = async (message: WAMessage) => {
     logger.info({ pollMessageId: message.key.id, pollTitle: getPollTitle(message.message) }, 'synced poll creation to Python service')
 }
 
+const forwardPollVoteUpdate = async ({
+    groupJid,
+    pollMessageId,
+    pollCreationMessage,
+    voterJid,
+    selectedOptions,
+    timestampMs,
+    sourceMessageId,
+    source,
+}: {
+    groupJid: string | null | undefined
+    pollMessageId: string | null | undefined
+    pollCreationMessage: WAMessage
+    voterJid: string
+    selectedOptions: Uint8Array[]
+    timestampMs: number
+    sourceMessageId?: string | null
+    source: 'messages.update' | 'messages.upsert'
+}) => {
+    const selectedOptionNames = resolveSelectedOptionNames(pollCreationMessage.message, selectedOptions)
+    const dedupeKey = buildVoteDedupeKey(
+        pollMessageId,
+        voterJid,
+        selectedOptionNames,
+        timestampMs,
+        sourceMessageId
+    )
+
+    await postInternal('/internal/whatsapp/poll-vote', {
+        dedupe_key: dedupeKey,
+        group_jid: groupJid,
+        poll_message_id: pollMessageId,
+        poll_title: getPollTitle(pollCreationMessage.message),
+        poll_options: getPollOptions(pollCreationMessage.message).map(option => option.optionName || ''),
+        voter_jid: voterJid,
+        voter_phone: normalizeVoterPhone(voterJid),
+        selected_options: selectedOptionNames,
+        vote_timestamp_ms: timestampMs,
+    })
+
+    logger.info(
+        {
+            source,
+            pollMessageId,
+            voterJid,
+            selectedOptionNames,
+        },
+        'forwarded poll vote update to Python service'
+    )
+}
+
 const processPollUpdates = async (updates: WAMessageUpdate[]) => {
+    const pollRelatedUpdates = updates.filter(({ key, update }) => isTargetGroup(key.remoteJid) && !!update.pollUpdates?.length)
+    if (pollRelatedUpdates.length) {
+        logger.info({ count: pollRelatedUpdates.length }, 'received poll-related messages.update entries')
+    }
+
     for (const { key, update } of updates) {
-        if (!isTargetGroup(key.remoteJid) || !update.pollUpdates?.length) {
+        if (!isTargetGroup(key.remoteJid)) {
+            logger.debug({ pollMessageId: key.id, remoteJid: key.remoteJid }, 'ignoring poll update outside configured groups')
+            continue
+        }
+
+        if (!update.pollUpdates?.length) {
+            logger.debug({ pollMessageId: key.id }, 'ignoring messages.update without pollUpdates')
             continue
         }
 
@@ -241,7 +330,7 @@ const processPollUpdates = async (updates: WAMessageUpdate[]) => {
 
         const pollCreationMessage = pollStore.get(pollKey(key))
         if (!pollCreationMessage?.message) {
-            logger.warn({ pollMessageId: key.id }, 'poll creation message missing for vote update')
+            logger.warn({ pollMessageId: key.id, remoteJid: key.remoteJid }, 'poll creation message missing for vote update')
             continue
         }
 
@@ -249,37 +338,116 @@ const processPollUpdates = async (updates: WAMessageUpdate[]) => {
             const pollUpdateMessageKey = pollUpdate.pollUpdateMessageKey
             const selectedOptions = pollUpdate.vote?.selectedOptions ?? []
             const voterJid = getKeyAuthor(pollUpdateMessageKey)
-            const selectedOptionNames = resolveSelectedOptionNames(pollCreationMessage.message, selectedOptions)
-            const dedupeKey =
-                pollUpdateMessageKey?.id ||
-                `${key.id}:${voterJid}:${pollUpdate.senderTimestampMs ?? Date.now()}:${selectedOptionNames.join('|')}`
 
             if (!voterJid) {
                 logger.warn({ pollMessageId: key.id }, 'poll vote update had no voter jid')
                 continue
             }
 
-            await postInternal('/internal/whatsapp/poll-vote', {
-                dedupe_key: dedupeKey,
-                group_jid: key.remoteJid,
-                poll_message_id: key.id,
-                poll_title: getPollTitle(pollCreationMessage.message),
-                poll_options: getPollOptions(pollCreationMessage.message).map(option => option.optionName || ''),
-                voter_jid: voterJid,
-                voter_phone: normalizeVoterPhone(voterJid),
-                selected_options: selectedOptionNames,
-                vote_timestamp_ms: pollUpdate.senderTimestampMs ?? Date.now(),
+            await forwardPollVoteUpdate({
+                groupJid: key.remoteJid,
+                pollMessageId: key.id,
+                pollCreationMessage,
+                voterJid,
+                selectedOptions,
+                timestampMs: getTimestampMs(pollUpdate.senderTimestampMs, Date.now()),
+                sourceMessageId: pollUpdateMessageKey?.id,
+                source: 'messages.update',
             })
-
-            logger.info(
-                {
-                    pollMessageId: key.id,
-                    voterJid,
-                    selectedOptionNames,
-                },
-                'forwarded poll vote update to Python service'
-            )
         }
+    }
+}
+
+const processPollVoteMessages = async (messages: WAMessage[]) => {
+    const pollUpdateMessages = messages.filter(message => !!normalizeMessageContent(message.message)?.pollUpdateMessage)
+    if (pollUpdateMessages.length) {
+        logger.info({ count: pollUpdateMessages.length }, 'received poll update messages in upsert batch')
+    }
+
+    for (const message of messages) {
+        const content = normalizeMessageContent(message.message)
+        const pollUpdateMessage = content?.pollUpdateMessage
+        if (!pollUpdateMessage) {
+            continue
+        }
+
+        logger.info(
+            {
+                messageId: message.key.id,
+                remoteJid: message.key.remoteJid,
+                pollMessageId: pollUpdateMessage.pollCreationMessageKey?.id,
+            },
+            'processing incoming poll update message'
+        )
+
+        if (!isTargetGroup(message.key.remoteJid)) {
+            logger.debug(
+                { messageId: message.key.id, remoteJid: message.key.remoteJid },
+                'ignoring poll update message outside configured groups'
+            )
+            continue
+        }
+
+        if (!liveVoteProcessingEnabled) {
+            logger.debug({ messageId: message.key.id }, 'ignoring poll update message during history bootstrap')
+            continue
+        }
+
+        const creationMsgKey = pollUpdateMessage.pollCreationMessageKey
+        const pollMessageId = creationMsgKey?.id
+        if (!creationMsgKey?.remoteJid || !pollMessageId) {
+            logger.warn({ messageId: message.key.id }, 'poll update message missing poll creation key details')
+            continue
+        }
+
+        const pollCreationMessage = pollStore.get(pollKey(creationMsgKey))
+        if (!pollCreationMessage?.message) {
+            logger.warn(
+                { messageId: message.key.id, pollMessageId, remoteJid: creationMsgKey.remoteJid },
+                'poll creation message missing for poll update message'
+            )
+            continue
+        }
+
+        const pollEncKey = pollCreationMessage.message.messageContextInfo?.messageSecret
+        if (!pollEncKey) {
+            logger.warn({ messageId: message.key.id, pollMessageId }, 'poll creation message missing messageSecret')
+            continue
+        }
+
+        const pollCreatorJid = getKeyAuthor(creationMsgKey)
+        const voterJid = getKeyAuthor(message.key)
+        if (!pollCreatorJid || !voterJid || !pollUpdateMessage.vote) {
+            logger.warn(
+                { messageId: message.key.id, pollMessageId, hasVote: !!pollUpdateMessage.vote },
+                'poll update message missing decrypt context'
+            )
+            continue
+        }
+
+        let decryptedVote: proto.Message.IPollVoteMessage
+        try {
+            decryptedVote = decryptPollVote(pollUpdateMessage.vote, {
+                pollCreatorJid,
+                pollMsgId: pollMessageId,
+                pollEncKey,
+                voterJid,
+            })
+        } catch (error) {
+            logger.warn({ err: error, messageId: message.key.id, pollMessageId }, 'failed to decrypt poll update message')
+            continue
+        }
+
+        await forwardPollVoteUpdate({
+            groupJid: creationMsgKey.remoteJid,
+            pollMessageId,
+            pollCreationMessage,
+            voterJid,
+            selectedOptions: decryptedVote.selectedOptions || [],
+            timestampMs: getTimestampMs(pollUpdateMessage.senderTimestampMs, getMessageTimestampMs(message)),
+            sourceMessageId: message.key.id,
+            source: 'messages.upsert',
+        })
     }
 }
 
@@ -383,6 +551,8 @@ const startSock = async () => {
                 cachePollCreationMessage(message)
                 await syncPollCreationMessage(message)
             }
+
+            await processPollVoteMessages(events['messages.upsert'].messages)
         }
 
         if (events['messages.update']) {
