@@ -8,5 +8,10 @@ services:
       - .env
     ports:
       - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+      - whatsapp_bridge_auth:/app/whatsapp_bridge/baileys_auth_info
     restart: unless-stopped
 
+volumes:
+  whatsapp_bridge_auth:
