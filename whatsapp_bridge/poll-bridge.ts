@@ -46,6 +46,10 @@ const pollStorePath = process.env.POLL_STORE_PATH ?? 'poll_store.json'
 const usePairingCode = process.env.USE_PAIRING_CODE === 'true'
 const phoneNumber = process.env.PHONE_NUMBER?.trim()
 const pairingCodeOutputPath = process.env.PAIRING_CODE_OUTPUT_PATH?.trim()
+const historyBackfillPageSize = Math.max(1, Number(process.env.HISTORY_BACKFILL_PAGE_SIZE ?? '50') || 50)
+const historyBackfillMaxPages = Math.max(1, Number(process.env.HISTORY_BACKFILL_MAX_PAGES ?? '3') || 3)
+const historyBackfillTimeoutMs = Math.max(1_000, Number(process.env.HISTORY_BACKFILL_TIMEOUT_MS ?? '15000') || 15_000)
+const enableHistoryBackfill = process.env.ENABLE_HISTORY_BACKFILL !== 'false'
 
 if (usePairingCode && !phoneNumber) {
     throw new Error('PHONE_NUMBER is required when USE_PAIRING_CODE=true')
@@ -57,6 +61,8 @@ if (!pythonInternalToken) {
 
 const pollStore = new Map<string, WAMessage>()
 const syncedPolls = new Set<string>()
+const oldestGroupMessages = new Map<string, WAMessage>()
+const pendingHistoryBackfills = new Map<string, Promise<void>>()
 
 let liveVoteProcessingEnabled = false
 let connectionState: Partial<ConnectionState> = {}
@@ -65,9 +71,10 @@ let pairingCodeRequested = false
 let ownPnJid = ''
 let ownLidJid = ''
 let authStateKeys: SignalKeyStore | null = null
+let historyBackfillStarted = false
 
 const pollKey = (key: WAMessageKey) => `${key.remoteJid ?? ''}:${key.id ?? ''}`
-const isGroupJid = (jid: string | null | undefined) => !!jid && jid.endsWith('@g.us')
+const isGroupJid = (jid: string | null | undefined): jid is string => !!jid && jid.endsWith('@g.us')
 const uniqueJids = (...values: Array<string | null | undefined>) => {
     const seen = new Set<string>()
     const result: string[] = []
@@ -153,10 +160,39 @@ const loadPollStore = async () => {
         for (const { k, v } of entries) {
             const message = proto.WebMessageInfo.decode(Buffer.from(v, 'base64'))
             pollStore.set(k, message as WAMessage)
+            considerOldestGroupMessage(message as WAMessage)
         }
         logger.info({ count: pollStore.size, path: pollStorePath }, 'loaded poll store from disk')
     } catch (error) {
         logger.warn({ err: error, path: pollStorePath }, 'failed to load poll store from disk')
+    }
+}
+
+const considerOldestGroupMessage = (message: WAMessage) => {
+    const groupJid = message.key.remoteJid
+    if (!isGroupJid(groupJid) || !message.key.id) {
+        return
+    }
+
+    const currentOldest = oldestGroupMessages.get(groupJid)
+    if (!currentOldest) {
+        oldestGroupMessages.set(groupJid, message)
+        return
+    }
+
+    const candidateTimestamp = getMessageTimestampMs(message)
+    const currentTimestamp = getMessageTimestampMs(currentOldest)
+    if (candidateTimestamp < currentTimestamp) {
+        oldestGroupMessages.set(groupJid, message)
+        return
+    }
+
+    if (candidateTimestamp === currentTimestamp) {
+        const candidateId = message.key.id ?? ''
+        const currentId = currentOldest.key.id ?? ''
+        if (candidateId && (!currentId || candidateId < currentId)) {
+            oldestGroupMessages.set(groupJid, message)
+        }
     }
 }
 
@@ -173,6 +209,8 @@ const savePollStore = async () => {
 }
 
 const cachePollCreationMessage = (message: WAMessage) => {
+    considerOldestGroupMessage(message)
+
     if (!isTargetGroup(message.key.remoteJid) || !message.key.id || !isPollCreationMessage(message.message)) {
         return
     }
@@ -338,6 +376,165 @@ const reportSessionEvent = async (
     }
 }
 
+const waitForOnDemandHistory = async (
+    sock: ReturnType<typeof makeWASocket>,
+    requestId: string,
+    groupJid: string
+) =>
+    new Promise<WAMessage[] | null>(resolve => {
+        const cleanup = () => {
+            clearTimeout(timer)
+            sock.ev.off('messaging-history.set', handler)
+        }
+
+        const timer = setTimeout(() => {
+            cleanup()
+            resolve(null)
+        }, historyBackfillTimeoutMs)
+
+        const handler = (payload: {
+            messages: WAMessage[]
+            syncType?: proto.HistorySync.HistorySyncType | null
+            peerDataRequestSessionId?: string | null
+        }) => {
+            if (
+                payload.syncType !== proto.HistorySync.HistorySyncType.ON_DEMAND ||
+                payload.peerDataRequestSessionId !== requestId
+            ) {
+                return
+            }
+
+            cleanup()
+            resolve(payload.messages.filter(message => message.key.remoteJid === groupJid))
+        }
+
+        sock.ev.on('messaging-history.set', handler)
+    })
+
+const backfillGroupHistoryFromAnchor = async (
+    sock: ReturnType<typeof makeWASocket>,
+    anchorMessage: WAMessage,
+    reason: string
+) => {
+    const groupJid = anchorMessage.key.remoteJid
+    const anchorMessageId = anchorMessage.key.id
+    if (!enableHistoryBackfill || !groupJid || !anchorMessageId || !isTargetGroup(groupJid)) {
+        return
+    }
+
+    const existing = pendingHistoryBackfills.get(groupJid)
+    if (existing) {
+        await existing
+        return
+    }
+
+    const backfillPromise = (async () => {
+        let previousAnchorId = ''
+
+        for (let page = 1; page <= historyBackfillMaxPages; page += 1) {
+            const currentAnchor = oldestGroupMessages.get(groupJid) ?? anchorMessage
+            const currentAnchorId = currentAnchor.key.id
+            if (!currentAnchorId || currentAnchorId === previousAnchorId) {
+                break
+            }
+
+            previousAnchorId = currentAnchorId
+            const oldestMsgTimestamp =
+                currentAnchor.messageTimestamp ?? Math.floor(getMessageTimestampMs(currentAnchor) / 1000)
+            const requestId = await sock.fetchMessageHistory(
+                historyBackfillPageSize,
+                currentAnchor.key,
+                oldestMsgTimestamp
+            )
+
+            logger.info(
+                {
+                    groupJid,
+                    anchorMessageId: currentAnchorId,
+                    page,
+                    reason,
+                    requestId,
+                },
+                'requested on-demand group history backfill'
+            )
+
+            const historyMessages = await waitForOnDemandHistory(sock, requestId, groupJid)
+            if (!historyMessages?.length) {
+                logger.info({ groupJid, page, reason, requestId }, 'no additional on-demand history returned')
+                break
+            }
+
+            const oldestAfterBackfill = oldestGroupMessages.get(groupJid)
+            if (!oldestAfterBackfill?.key.id || oldestAfterBackfill.key.id === currentAnchorId) {
+                logger.info(
+                    {
+                        groupJid,
+                        page,
+                        reason,
+                        requestId,
+                    },
+                    'on-demand history did not advance oldest known message'
+                )
+                break
+            }
+        }
+    })()
+
+    pendingHistoryBackfills.set(groupJid, backfillPromise)
+    try {
+        await backfillPromise
+    } finally {
+        pendingHistoryBackfills.delete(groupJid)
+    }
+}
+
+const backfillKnownGroupHistory = async (sock: ReturnType<typeof makeWASocket>) => {
+    if (!enableHistoryBackfill) {
+        logger.info('historical poll backfill disabled by configuration')
+        return
+    }
+
+    const groupsToBackfill = Array.from(oldestGroupMessages.values())
+        .map(message => ({ message, groupJid: message.key.remoteJid }))
+        .filter(
+            (entry): entry is { message: WAMessage; groupJid: string } =>
+                isTargetGroup(entry.groupJid)
+        )
+    if (!groupsToBackfill.length) {
+        logger.info('no known group history anchors available for poll backfill')
+        return
+    }
+
+    logger.info(
+        {
+            groups: groupsToBackfill.map(({ message, groupJid }) => ({
+                groupJid,
+                anchorMessageId: message.key.id,
+            })),
+            maxPages: historyBackfillMaxPages,
+            pageSize: historyBackfillPageSize,
+        },
+        'starting historical group poll backfill'
+    )
+
+    for (const { message } of groupsToBackfill) {
+        await backfillGroupHistoryFromAnchor(sock, message, 'initial bootstrap backfill')
+    }
+}
+
+const recoverMissingPollCreationMessage = async (
+    sock: ReturnType<typeof makeWASocket>,
+    anchorMessage: WAMessage,
+    pollCreationKey: WAMessageKey
+) => {
+    if (!pollCreationKey.remoteJid || !pollCreationKey.id) {
+        return null
+    }
+
+    await backfillGroupHistoryFromAnchor(sock, anchorMessage, 'recover missing poll creation')
+    return pollStore.get(pollKey(pollCreationKey)) ?? null
+}
+
 const logKnownGroups = (groups: Record<string, GroupMetadata>) => {
     const entries = Object.entries(groups).map(([jid, metadata]) => ({ jid, subject: metadata.subject }))
     logger.info({ groups: entries }, 'available WhatsApp groups for bridge selection')
@@ -369,7 +566,8 @@ const syncPollCreationMessage = async (
     message: WAMessage,
     source: 'messages.upsert' | 'messaging-history.set'
 ) => {
-    if (!message.key.id || !isTargetGroup(message.key.remoteJid) || !message.message || !isPollCreationMessage(message.message)) {
+    const groupJid = message.key.remoteJid
+    if (!message.key.id || !isTargetGroup(groupJid) || !message.message || !isPollCreationMessage(message.message)) {
         return
     }
 
@@ -378,7 +576,7 @@ const syncPollCreationMessage = async (
             {
                 source,
                 pollMessageId: message.key.id,
-                remoteJid: message.key.remoteJid,
+                remoteJid: groupJid,
             },
             'skipping already-synced poll creation message'
         )
@@ -389,7 +587,7 @@ const syncPollCreationMessage = async (
         {
             source,
             pollMessageId: message.key.id,
-            remoteJid: message.key.remoteJid,
+            remoteJid: groupJid,
             pollTitle: getPollTitle(message.message),
             optionCount: getPollOptions(message.message).length,
         },
@@ -397,7 +595,7 @@ const syncPollCreationMessage = async (
     )
 
     await postInternal('/internal/whatsapp/poll-created', {
-        group_jid: message.key.remoteJid,
+        group_jid: groupJid,
         poll_message_id: message.key.id,
         poll_title: getPollTitle(message.message),
         poll_options: getPollOptions(message.message).map(option => option.optionName || ''),
@@ -463,7 +661,10 @@ const forwardPollVoteUpdate = async ({
     )
 }
 
-const processPollUpdates = async (updates: WAMessageUpdate[]) => {
+const processPollUpdates = async (
+    sock: ReturnType<typeof makeWASocket>,
+    updates: WAMessageUpdate[]
+) => {
     const pollRelatedUpdates = updates.filter(({ key, update }) => isTargetGroup(key.remoteJid) && !!update.pollUpdates?.length)
     if (pollRelatedUpdates.length) {
         logger.info({ count: pollRelatedUpdates.length }, 'received poll-related messages.update entries')
@@ -485,16 +686,23 @@ const processPollUpdates = async (updates: WAMessageUpdate[]) => {
             continue
         }
 
-        const pollCreationMessage = pollStore.get(pollKey(key))
-        if (!pollCreationMessage?.message) {
-            logger.warn({ pollMessageId: key.id, remoteJid: key.remoteJid }, 'poll creation message missing for vote update')
-            continue
-        }
-
         for (const pollUpdate of update.pollUpdates) {
             const pollUpdateMessageKey = pollUpdate.pollUpdateMessageKey
             const selectedOptions = pollUpdate.vote?.selectedOptions ?? []
             const voterJid = getKeyAuthor(pollUpdateMessageKey)
+            const pollCreationMessage =
+                pollStore.get(pollKey(key)) ??
+                (pollUpdateMessageKey
+                    ? await recoverMissingPollCreationMessage(sock, {
+                        key: pollUpdateMessageKey,
+                        messageTimestamp: pollUpdate.senderTimestampMs ?? undefined,
+                    } as WAMessage, key)
+                    : null)
+
+            if (!pollCreationMessage?.message) {
+                logger.warn({ pollMessageId: key.id, remoteJid: key.remoteJid }, 'poll creation message missing for vote update')
+                continue
+            }
 
             if (!voterJid) {
                 logger.warn({ pollMessageId: key.id }, 'poll vote update had no voter jid')
@@ -516,7 +724,10 @@ const processPollUpdates = async (updates: WAMessageUpdate[]) => {
     }
 }
 
-const processPollVoteMessages = async (messages: WAMessage[]) => {
+const processPollVoteMessages = async (
+    sock: ReturnType<typeof makeWASocket>,
+    messages: WAMessage[]
+) => {
     const pollUpdateMessages = messages.filter(message => !!normalizeMessageContent(message.message)?.pollUpdateMessage)
     if (pollUpdateMessages.length) {
         logger.info(
@@ -565,7 +776,10 @@ const processPollVoteMessages = async (messages: WAMessage[]) => {
             continue
         }
 
-        const pollCreationMessage = pollStore.get(pollKey(creationMsgKey))
+        const pollCreationMessage =
+            pollStore.get(pollKey(creationMsgKey)) ??
+            await recoverMissingPollCreationMessage(sock, message, creationMsgKey)
+
         if (!pollCreationMessage?.message) {
             logger.warn(
                 { messageId: message.key.id, pollMessageId, remoteJid: creationMsgKey.remoteJid },
@@ -744,6 +958,10 @@ const startSock = async () => {
             if (update.receivedPendingNotifications) {
                 liveVoteProcessingEnabled = true
                 logger.info('history bootstrap complete, live poll processing enabled')
+                if (!historyBackfillStarted) {
+                    historyBackfillStarted = true
+                    void backfillKnownGroupHistory(sock)
+                }
             }
 
             if (update.connection === 'close') {
@@ -785,6 +1003,7 @@ const startSock = async () => {
             }
 
             for (const message of events['messaging-history.set'].messages) {
+                considerOldestGroupMessage(message)
                 cachePollCreationMessage(message)
                 await syncPollCreationMessage(message, 'messaging-history.set')
             }
@@ -805,11 +1024,12 @@ const startSock = async () => {
                     )
                 }
 
+                considerOldestGroupMessage(message)
                 cachePollCreationMessage(message)
                 await syncPollCreationMessage(message, 'messages.upsert')
             }
 
-            await processPollVoteMessages(events['messages.upsert'].messages)
+            await processPollVoteMessages(sock, events['messages.upsert'].messages)
         }
 
         if (events['messages.update']) {
@@ -825,7 +1045,7 @@ const startSock = async () => {
                 )
             }
 
-            await processPollUpdates(events['messages.update'])
+            await processPollUpdates(sock, events['messages.update'])
         }
     })
 
