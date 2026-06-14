@@ -26,6 +26,9 @@ COPY --from=bridge-deps /build/whatsapp_bridge/node_modules ./whatsapp_bridge/no
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir .
 
+RUN mkdir -p /app/whatsapp_bridge/baileys_auth_info /app/logs \
+    && chown -R app:app /app/whatsapp_bridge/baileys_auth_info /app/logs
+
 USER app
 
 EXPOSE 8000
