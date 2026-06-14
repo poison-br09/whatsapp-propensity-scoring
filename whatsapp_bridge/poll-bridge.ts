@@ -884,7 +884,24 @@ const getTextContent = (message: WAMessage): string | null => {
     return null
 }
 
-const forwardChatMessages = async (messages: WAMessage[], sock: ReturnType<typeof makeWASocket>) => {
+type ContactLookup = Map<string, { phone: string | null; name: string | null }>
+
+const buildContactLookup = (contacts: { id?: string | null; lid?: string | null; notify?: string | null; name?: string | null }[]): ContactLookup => {
+    const map: ContactLookup = new Map()
+    for (const c of contacts) {
+        const phone = normalizeVoterPhone(c.id ?? '') ?? null
+        const name = c.notify ?? c.name ?? null
+        if (c.id) map.set(jidNormalizedUser(c.id), { phone, name })
+        if (c.lid) map.set(jidNormalizedUser(c.lid), { phone, name })
+    }
+    return map
+}
+
+const forwardChatMessages = async (
+    messages: WAMessage[],
+    sock: ReturnType<typeof makeWASocket>,
+    contactLookup?: ContactLookup,
+) => {
     const rawOwnJid = ownPnJid || sock.authState.creds.me?.id || ''
     const receiverPhone = normalizeVoterPhone(rawOwnJid) ?? null
     for (const message of messages) {
@@ -895,14 +912,16 @@ const forwardChatMessages = async (messages: WAMessage[], sock: ReturnType<typeo
         if (!text || !message.key.id) continue
 
         const senderJid = message.key.participant ?? getKeyParticipantAlt(message.key) ?? ''
-        const senderPhone = await resolveVoterPhone(senderJid) ?? null
+        const contactInfo = senderJid ? contactLookup?.get(jidNormalizedUser(senderJid)) : undefined
+        const senderPhone = await resolveVoterPhone(senderJid) ?? contactInfo?.phone ?? null
+        const senderName = message.pushName ?? contactInfo?.name ?? null
         const timestampMs = getMessageTimestampMs(message)
 
         try {
             await postInternal('/internal/whatsapp/message', {
                 group_jid: groupJid,
                 sender_jid: senderJid,
-                sender_name: message.pushName ?? null,
+                sender_name: senderName,
                 sender_phone: senderPhone,
                 receiver_phone: receiverPhone,
                 message: text,
@@ -1101,7 +1120,8 @@ const startSock = async () => {
                 cachePollCreationMessage(message)
                 await syncPollCreationMessage(message, 'messaging-history.set')
             }
-            await forwardChatMessages(events['messaging-history.set'].messages, sock)
+            const contactLookup = buildContactLookup(events['messaging-history.set'].contacts ?? [])
+            await forwardChatMessages(events['messaging-history.set'].messages, sock, contactLookup)
         }
 
         if (events['messages.upsert']) {
