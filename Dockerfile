@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir .
 
 RUN mkdir -p /app/whatsapp_bridge/baileys_auth_info /app/logs \
-    && chown -R app:app /app/whatsapp_bridge/baileys_auth_info /app/logs
+    && chown -R app:app /app/whatsapp_bridge /app/logs
 
 USER app
 
