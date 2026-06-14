@@ -876,6 +876,45 @@ const tokenMatches = (a: string, b: string): boolean => {
     return ab.length === bb.length && timingSafeEqual(ab, bb)
 }
 
+const getTextContent = (message: WAMessage): string | null => {
+    const content = normalizeMessageContent(message.message)
+    if (!content) return null
+    if (content.conversation) return content.conversation
+    if (content.extendedTextMessage?.text) return content.extendedTextMessage.text
+    return null
+}
+
+const forwardChatMessages = async (messages: WAMessage[]) => {
+    for (const message of messages) {
+        const groupJid = message.key.remoteJid
+        if (!isTargetGroup(groupJid) || message.key.fromMe) continue
+
+        const text = getTextContent(message)
+        if (!text || !message.key.id) continue
+
+        const senderJid = message.key.participant ?? ''
+        const senderPhone = normalizeVoterPhone(senderJid) ?? null
+        const timestampMs = getMessageTimestampMs(message)
+
+        try {
+            await postInternal('/internal/whatsapp/message', {
+                group_jid: groupJid,
+                sender_jid: senderJid,
+                sender_name: message.pushName ?? null,
+                sender_phone: senderPhone,
+                message: text,
+                message_id: message.key.id,
+                message_timestamp_ms: timestampMs,
+            })
+        } catch (error) {
+            logger.warn(
+                { err: error, messageId: message.key.id, groupJid },
+                'failed to forward chat message for keyword analysis'
+            )
+        }
+    }
+}
+
 const startBackfillControlServer = () => {
     const server = createServer((req, res) => {
         res.setHeader('Content-Type', 'application/json')
@@ -1082,6 +1121,7 @@ const startSock = async () => {
             }
 
             await processPollVoteMessages(sock, events['messages.upsert'].messages)
+            await forwardChatMessages(events['messages.upsert'].messages)
         }
 
         if (events['messages.update']) {

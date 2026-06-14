@@ -5,7 +5,7 @@ from typing import Any
 
 from app.core.config import Settings
 from app.models.poll import PollPredictionRecord, UserHistory
-from app.models.whatsapp import WhatsAppPollRecord, WhatsAppPollVoteEventRecord, WhatsAppPollVoteSnapshotRecord
+from app.models.whatsapp import WhatsAppKeywordMatchRecord, WhatsAppPollRecord, WhatsAppPollVoteEventRecord, WhatsAppPollVoteSnapshotRecord
 
 Logger = logging.getLogger
 logger = Logger(__name__)
@@ -70,6 +70,9 @@ class SupabasePollRepository:
     async def upsert_whatsapp_poll_vote_snapshot(self, record: WhatsAppPollVoteSnapshotRecord) -> None:
         await asyncio.to_thread(self._upsert_whatsapp_vote_snapshot_payload, record.to_supabase_payload())
 
+    async def store_keyword_match(self, record: WhatsAppKeywordMatchRecord) -> None:
+        await asyncio.to_thread(self._insert_keyword_match_payload, record.to_supabase_payload())
+
     def _call_history_rpc(self, phone_numbers: list[str]) -> Any:
         return (
             self._get_client()
@@ -119,6 +122,28 @@ class SupabasePollRepository:
             self._get_client()
             .table(self._settings.supabase_whatsapp_vote_snapshot_table)
             .upsert(payload, on_conflict='poll_message_id,voter_jid')
+            .execute()
+        )
+
+    async def get_active_keywords(self) -> list[dict[str, str]]:
+        rows = await asyncio.to_thread(self._fetch_active_keywords)
+        return [{'id': str(row['id']), 'keyword': str(row['keyword'])} for row in rows]
+
+    def _fetch_active_keywords(self) -> list[Any]:
+        result = (
+            self._get_client()
+            .table(self._settings.supabase_whatsapp_keywords_table)
+            .select('id,keyword')
+            .eq('is_active', True)
+            .execute()
+        )
+        return getattr(result, 'data', result) or []
+
+    def _insert_keyword_match_payload(self, payload: dict[str, object]) -> Any:
+        return (
+            self._get_client()
+            .table(self._settings.supabase_whatsapp_keyword_match_table)
+            .upsert(payload, on_conflict='message_id,keyword_id')
             .execute()
         )
 

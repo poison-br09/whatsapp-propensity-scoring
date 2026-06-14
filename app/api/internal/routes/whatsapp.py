@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.core.config import Settings, get_settings
 from app.models.whatsapp import (
+    WhatsAppMessageWebhook,
+    WhatsAppMessageWebhookResponse,
     WhatsAppPollCreatedWebhook,
     WhatsAppPollCreatedWebhookResponse,
     WhatsAppPollVoteWebhook,
@@ -15,6 +17,8 @@ from app.models.whatsapp import (
 )
 from app.repositories.supabase_poll_repository import SupabasePollRepository
 from app.services.email_service import EmailService
+from app.services.keyword_analysis_service import KeywordAnalysisService
+from app.services.keyword_analysis_state import KeywordAnalysisStateService
 from app.services.whatsapp_session_state import WhatsAppSessionStateService
 from app.services.whatsapp_poll_ingestion_service import WhatsAppPollIngestionService
 
@@ -48,6 +52,19 @@ def get_session_state_service(request: Request) -> WhatsAppSessionStateService:
         raise HTTPException(status_code=503, detail='WhatsApp session state service is unavailable.')
 
     return session_state_service
+
+
+def get_keyword_analysis_state(request: Request) -> KeywordAnalysisStateService:
+    state = getattr(request.app.state, 'keyword_analysis_state', None)
+    if state is None:
+        raise HTTPException(status_code=503, detail='Keyword analysis state service is unavailable.')
+    return state
+
+
+def get_keyword_analysis_service(
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+) -> KeywordAnalysisService:
+    return KeywordAnalysisService(repository)
 
 
 def require_internal_token(
@@ -95,6 +112,29 @@ async def ingest_poll_vote(
         payload.selected_options,
     )
     return await service.ingest_vote(payload)
+
+
+@router.post('/message', response_model=WhatsAppMessageWebhookResponse)
+async def ingest_message(
+    payload: WhatsAppMessageWebhook,
+    request: Request,
+    _: None = Depends(require_internal_token),
+    service: KeywordAnalysisService = Depends(get_keyword_analysis_service),
+) -> WhatsAppMessageWebhookResponse:
+    state: KeywordAnalysisStateService = get_keyword_analysis_state(request)
+    if not state.enabled:
+        logger.debug(
+            'Keyword analysis disabled, skipping message_id=%s',
+            payload.message_id,
+        )
+        return WhatsAppMessageWebhookResponse(matched=False)
+
+    logger.debug(
+        'Received internal WhatsApp message message_id=%s sender_phone=%s',
+        payload.message_id,
+        payload.sender_phone,
+    )
+    return await service.analyze_message(payload)
 
 
 @router.post('/session-event', response_model=WhatsAppSessionEventWebhookResponse)

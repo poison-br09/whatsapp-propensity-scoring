@@ -10,10 +10,12 @@ from app.core.config import Settings, get_settings
 from app.core.whatsapp_bridge import BaileysBridgeProcessManager
 from app.models.whatsapp import (
     WhatsAppBackfillActionResponse,
+    WhatsAppKeywordAnalysisActionResponse,
     WhatsAppPairingRequest,
     WhatsAppPairingResponse,
     WhatsAppSessionStatusResponse,
 )
+from app.services.keyword_analysis_state import KeywordAnalysisStateService
 from app.services.whatsapp_session_state import WhatsAppSessionStateService
 
 Logger = logging.getLogger
@@ -178,3 +180,47 @@ async def stop_history_backfill(
 ) -> WhatsAppBackfillActionResponse:
     logger.info('Received admin request to stop history backfill')
     return await _call_bridge_backfill('stop', settings)
+
+
+def get_keyword_analysis_state(request: Request) -> KeywordAnalysisStateService:
+    state = getattr(request.app.state, 'keyword_analysis_state', None)
+    if state is None:
+        logger.error('Keyword analysis state service is unavailable on application state')
+        raise HTTPException(status_code=503, detail='Keyword analysis state service is unavailable.')
+    return state
+
+
+@router.post(
+    '/keyword-analysis/start',
+    response_model=WhatsAppKeywordAnalysisActionResponse,
+    responses={
+        401: {'description': 'Missing or invalid x-api-key header.'},
+        503: {'description': 'Keyword analysis state service is unavailable.'},
+    },
+)
+async def start_keyword_analysis(
+    request: Request,
+    _: None = Depends(require_api_key),
+) -> WhatsAppKeywordAnalysisActionResponse:
+    state = get_keyword_analysis_state(request)
+    state.enable()
+    logger.info('Keyword analysis enabled by admin')
+    return WhatsAppKeywordAnalysisActionResponse(action='start', enabled=True)
+
+
+@router.post(
+    '/keyword-analysis/stop',
+    response_model=WhatsAppKeywordAnalysisActionResponse,
+    responses={
+        401: {'description': 'Missing or invalid x-api-key header.'},
+        503: {'description': 'Keyword analysis state service is unavailable.'},
+    },
+)
+async def stop_keyword_analysis(
+    request: Request,
+    _: None = Depends(require_api_key),
+) -> WhatsAppKeywordAnalysisActionResponse:
+    state = get_keyword_analysis_state(request)
+    state.disable()
+    logger.info('Keyword analysis disabled by admin')
+    return WhatsAppKeywordAnalysisActionResponse(action='stop', enabled=False)

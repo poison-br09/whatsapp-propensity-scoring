@@ -75,6 +75,27 @@ class WhatsAppBackfillActionResponse(BaseModel):
     accepted: bool
 
 
+class WhatsAppMessageWebhook(BaseModel):
+    group_jid: str
+    sender_jid: str
+    sender_name: str | None = None
+    sender_phone: str | None = None
+    message: str
+    message_id: str
+    message_timestamp_ms: int
+
+
+class WhatsAppMessageWebhookResponse(BaseModel):
+    matched: bool
+    keywords: list[str] = Field(default_factory=list)
+    stored: bool = False
+
+
+class WhatsAppKeywordAnalysisActionResponse(BaseModel):
+    action: str
+    enabled: bool
+
+
 @dataclass(slots=True)
 class WhatsAppPollRecord:
     group_jid: str
@@ -116,6 +137,32 @@ class WhatsAppPollVoteEventRecord:
             'selected_options': self.selected_options,
             'normalized_vote': self.normalized_vote,
             'vote_timestamp': self.vote_timestamp.isoformat(),
+        }
+
+
+@dataclass(slots=True)
+class WhatsAppKeywordMatchRecord:
+    keyword_id: str
+    keyword: str
+    group_jid: str
+    sender_jid: str
+    sender_name: str | None
+    sender_phone: str | None
+    message: str
+    message_id: str
+    message_date: datetime
+
+    def to_supabase_payload(self) -> dict[str, object]:
+        return {
+            'keyword_id': self.keyword_id,
+            'keyword': self.keyword,
+            'group_jid': self.group_jid,
+            'sender_jid': self.sender_jid,
+            'sender_name': self.sender_name,
+            'sender_phone': self.sender_phone,
+            'message': self.message,
+            'message_id': self.message_id,
+            'message_date': self.message_date.isoformat(),
         }
 
 

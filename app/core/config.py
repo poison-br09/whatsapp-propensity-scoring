@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     supabase_whatsapp_poll_table: str = 'whatsapp_poll'
     supabase_whatsapp_vote_event_table: str = 'whatsapp_poll_vote_event'
     supabase_whatsapp_vote_snapshot_table: str = 'whatsapp_poll_vote_snapshot'
+    supabase_whatsapp_keyword_match_table: str = 'whatsapp_keyword_match'
+    supabase_whatsapp_keywords_table: str = 'whatsapp_keywords'
     whatsapp_internal_token: str | None = None
     whatsapp_internal_base_url: str = 'http://127.0.0.1:8000'
     whatsapp_bridge_enabled: bool = False

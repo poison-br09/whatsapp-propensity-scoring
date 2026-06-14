@@ -9,6 +9,7 @@ from app.api.v1.routes.whatsapp import router as whatsapp_management_router
 from app.core.config import get_settings
 from app.core.logging_setup import configure_logging
 from app.core.whatsapp_bridge import BaileysBridgeProcessManager
+from app.services.keyword_analysis_state import KeywordAnalysisStateService
 from app.services.whatsapp_session_state import WhatsAppSessionStateService
 
 Logger = logging.getLogger
@@ -20,6 +21,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     bridge_manager = BaileysBridgeProcessManager(settings)
     app.state.whatsapp_session_state = WhatsAppSessionStateService()
+    app.state.keyword_analysis_state = KeywordAnalysisStateService()
     app.state.bridge_manager = bridge_manager
     bridge_manager.start()
     try:
