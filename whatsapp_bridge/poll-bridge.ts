@@ -923,7 +923,7 @@ const forwardChatMessages = async (
         const text = getTextContent(message)
         if (!text || !message.key.id) continue
 
-        const senderJid = message.key.participant ?? getKeyParticipantAlt(message.key) ?? ''
+        const senderJid = message.key.participant || getKeyParticipantAlt(message.key) || message.participant || ''
         const contactInfo = senderJid ? contactLookup?.get(jidNormalizedUser(senderJid)) : undefined
         const senderPhone = await resolveVoterPhone(senderJid) ?? contactInfo?.phone ?? null
         const senderName = message.pushName ?? contactInfo?.name ?? null

@@ -154,12 +154,19 @@ class SupabasePollRepository:
         return getattr(result, 'data', result) or []
 
     def _insert_keyword_match_payload(self, payload: dict[str, object]) -> Any:
-        return (
-            self._get_client()
-            .table(self._settings.supabase_whatsapp_keyword_match_table)
-            .upsert(payload, on_conflict='message_id,keyword_id')
-            .execute()
-        )
+        client = self._get_client()
+        table = self._settings.supabase_whatsapp_keyword_match_table
+        client.table(table).upsert(payload, on_conflict='message_id,keyword_id', ignore_duplicates=True).execute()
+        sender_update = {k: payload[k] for k in ('sender_jid', 'sender_name', 'sender_phone') if payload.get(k)}
+        if sender_update:
+            (
+                client.table(table)
+                .update(sender_update)
+                .eq('message_id', payload['message_id'])
+                .eq('keyword_id', payload['keyword_id'])
+                .eq('sender_jid', '')
+                .execute()
+            )
 
     def _get_client(self) -> Any:
         if self._client is not None:
