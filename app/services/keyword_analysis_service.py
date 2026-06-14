@@ -19,7 +19,11 @@ class KeywordAnalysisService:
 
     async def _get_keywords(self) -> list[dict[str, str]]:
         if self._keywords is None:
-            await self.refresh_keywords()
+            try:
+                await self.refresh_keywords()
+            except Exception:
+                logger.exception('Failed to load keywords from DB — skipping keyword analysis')
+                return []
         return self._keywords or []
 
     async def analyze_message(self, payload: WhatsAppMessageWebhook) -> WhatsAppMessageWebhookResponse:
@@ -51,13 +55,21 @@ class KeywordAnalysisService:
                 message_id=payload.message_id,
                 message_date=message_date,
             )
-            await self._repository.store_keyword_match(record)
-            stored = True
+            try:
+                await self._repository.store_keyword_match(record)
+                stored = True
+            except Exception:
+                logger.exception(
+                    'Failed to store keyword match message_id=%s keyword=%s',
+                    payload.message_id,
+                    kw['keyword'],
+                )
 
-        logger.info(
-            'Keyword match found message_id=%s sender_phone=%s keywords=%s',
-            payload.message_id,
-            payload.sender_phone,
-            list(found_texts),
-        )
+        if stored:
+            logger.info(
+                'Keyword match found message_id=%s sender_phone=%s keywords=%s',
+                payload.message_id,
+                payload.sender_phone,
+                list(found_texts),
+            )
         return WhatsAppMessageWebhookResponse(matched=True, keywords=list(found_texts), stored=stored)
