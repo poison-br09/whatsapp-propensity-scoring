@@ -80,6 +80,7 @@ class WhatsAppMessageWebhook(BaseModel):
     sender_jid: str
     sender_name: str | None = None
     sender_phone: str | None = None
+    receiver_phone: str | None = None
     message: str
     message_id: str
     message_timestamp_ms: int
@@ -168,6 +169,7 @@ class WhatsAppKeywordMatchRecord:
     sender_jid: str
     sender_name: str | None
     sender_phone: str | None
+    receiver_phone: str | None
     message: str
     message_id: str
     message_date: datetime
@@ -180,6 +182,7 @@ class WhatsAppKeywordMatchRecord:
             'sender_jid': self.sender_jid,
             'sender_name': self.sender_name,
             'sender_phone': self.sender_phone,
+            'receiver_phone': self.receiver_phone,
             'message': self.message,
             'message_id': self.message_id,
             'message_date': self.message_date.isoformat(),
