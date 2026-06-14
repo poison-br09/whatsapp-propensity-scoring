@@ -68,7 +68,7 @@ class WhatsAppPollIngestionService:
         )
         return WhatsAppPollCreatedWebhookResponse(stored_poll=True)
 
-    async def ingest_vote(self, payload: WhatsAppPollVoteWebhook) -> WhatsAppPollVoteWebhookResponse:
+    async def ingest_vote(self, payload: WhatsAppPollVoteWebhook, *, scoring_enabled: bool = True) -> WhatsAppPollVoteWebhookResponse:
         vote_timestamp = _timestamp_from_ms(payload.vote_timestamp_ms)
         poll_record = WhatsAppPollRecord(
             group_jid=payload.group_jid,
@@ -115,7 +115,12 @@ class WhatsAppPollIngestionService:
 
         prediction_score: float | None = None
         prediction_upserted = False
-        if payload.voter_phone and normalized_vote is not None:
+        if not scoring_enabled:
+            logger.info(
+                'Propensity scoring disabled, skipping prediction dedupe_key=%s',
+                payload.dedupe_key,
+            )
+        elif payload.voter_phone and normalized_vote is not None:
             if normalized_vote == 1:
                 history_map = await self._repository.get_user_history([payload.voter_phone])
                 history = history_map.get(payload.voter_phone, UserHistory(mobile=payload.voter_phone))

@@ -19,6 +19,7 @@ from app.repositories.supabase_poll_repository import SupabasePollRepository
 from app.services.email_service import EmailService
 from app.services.keyword_analysis_service import KeywordAnalysisService
 from app.services.keyword_analysis_state import KeywordAnalysisStateService
+from app.services.propensity_scoring_state import PropensityScoringStateService
 from app.services.whatsapp_session_state import WhatsAppSessionStateService
 from app.services.whatsapp_poll_ingestion_service import WhatsAppPollIngestionService
 
@@ -58,6 +59,13 @@ def get_keyword_analysis_state(request: Request) -> KeywordAnalysisStateService:
     state = getattr(request.app.state, 'keyword_analysis_state', None)
     if state is None:
         raise HTTPException(status_code=503, detail='Keyword analysis state service is unavailable.')
+    return state
+
+
+def get_propensity_scoring_state(request: Request) -> PropensityScoringStateService:
+    state = getattr(request.app.state, 'propensity_scoring_state', None)
+    if state is None:
+        raise HTTPException(status_code=503, detail='Propensity scoring state service is unavailable.')
     return state
 
 
@@ -101,6 +109,7 @@ async def ingest_poll_created(
 @router.post('/poll-vote', response_model=WhatsAppPollVoteWebhookResponse)
 async def ingest_poll_vote(
     payload: WhatsAppPollVoteWebhook,
+    request: Request,
     _: None = Depends(require_internal_token),
     service: WhatsAppPollIngestionService = Depends(get_whatsapp_poll_ingestion_service),
 ) -> WhatsAppPollVoteWebhookResponse:
@@ -111,7 +120,8 @@ async def ingest_poll_vote(
         payload.voter_phone,
         payload.selected_options,
     )
-    return await service.ingest_vote(payload)
+    scoring_enabled = get_propensity_scoring_state(request).enabled
+    return await service.ingest_vote(payload, scoring_enabled=scoring_enabled)
 
 
 @router.post('/message', response_model=WhatsAppMessageWebhookResponse)

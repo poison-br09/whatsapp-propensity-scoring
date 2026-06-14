@@ -96,6 +96,11 @@ class WhatsAppKeywordAnalysisActionResponse(BaseModel):
     enabled: bool
 
 
+class WhatsAppPropensityActionResponse(BaseModel):
+    action: str
+    enabled: bool
+
+
 class WhatsAppKeywordControlRequest(BaseModel):
     keywords: list[str] = Field(min_length=1)
     enabled: bool
