@@ -894,7 +894,7 @@ const forwardChatMessages = async (messages: WAMessage[], sock: ReturnType<typeo
         const text = getTextContent(message)
         if (!text || !message.key.id) continue
 
-        const senderJid = message.key.participant ?? ''
+        const senderJid = message.key.participant ?? getKeyParticipantAlt(message.key) ?? ''
         const senderPhone = await resolveVoterPhone(senderJid) ?? null
         const timestampMs = getMessageTimestampMs(message)
 
