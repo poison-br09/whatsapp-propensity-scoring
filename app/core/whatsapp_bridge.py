@@ -120,7 +120,8 @@ class BaileysBridgeProcessManager:
 
         auth_path = self._settings.baileys_auth_path or (bridge_dir / 'baileys_auth_info')
         if reset_session and auth_path.exists():
-            shutil.rmtree(auth_path)
+            for item in auth_path.iterdir():
+                shutil.rmtree(item) if item.is_dir() else item.unlink()
 
         log_dir = self._settings.baileys_log_path
         log_dir.mkdir(parents=True, exist_ok=True)
