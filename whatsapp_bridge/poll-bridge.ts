@@ -884,7 +884,9 @@ const getTextContent = (message: WAMessage): string | null => {
     return null
 }
 
-const forwardChatMessages = async (messages: WAMessage[]) => {
+const forwardChatMessages = async (messages: WAMessage[], sock: ReturnType<typeof makeWASocket>) => {
+    const rawOwnJid = ownPnJid || sock.authState.creds.me?.id || ''
+    const receiverPhone = normalizeVoterPhone(rawOwnJid) ?? null
     for (const message of messages) {
         const groupJid = message.key.remoteJid
         if (!isTargetGroup(groupJid) || message.key.fromMe) continue
@@ -894,7 +896,6 @@ const forwardChatMessages = async (messages: WAMessage[]) => {
 
         const senderJid = message.key.participant ?? ''
         const senderPhone = await resolveVoterPhone(senderJid) ?? null
-        const receiverPhone = normalizeVoterPhone(ownPnJid) ?? null
         const timestampMs = getMessageTimestampMs(message)
 
         try {
@@ -1100,7 +1101,7 @@ const startSock = async () => {
                 cachePollCreationMessage(message)
                 await syncPollCreationMessage(message, 'messaging-history.set')
             }
-            await forwardChatMessages(events['messaging-history.set'].messages)
+            await forwardChatMessages(events['messaging-history.set'].messages, sock)
         }
 
         if (events['messages.upsert']) {
@@ -1124,7 +1125,7 @@ const startSock = async () => {
             }
 
             await processPollVoteMessages(sock, events['messages.upsert'].messages)
-            await forwardChatMessages(events['messages.upsert'].messages)
+            await forwardChatMessages(events['messages.upsert'].messages, sock)
         }
 
         if (events['messages.update']) {
