@@ -1098,6 +1098,7 @@ const startSock = async () => {
                 cachePollCreationMessage(message)
                 await syncPollCreationMessage(message, 'messaging-history.set')
             }
+            await forwardChatMessages(events['messaging-history.set'].messages)
         }
 
         if (events['messages.upsert']) {
