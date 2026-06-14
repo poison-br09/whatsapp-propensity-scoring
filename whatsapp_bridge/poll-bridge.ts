@@ -1,6 +1,8 @@
 import { Boom } from '@hapi/boom'
+import { timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import P from 'pino'
 import makeWASocket, {
     DEFAULT_CONNECTION_CONFIG,
@@ -49,7 +51,8 @@ const pairingCodeOutputPath = process.env.PAIRING_CODE_OUTPUT_PATH?.trim()
 const historyBackfillPageSize = Math.max(1, Number(process.env.HISTORY_BACKFILL_PAGE_SIZE ?? '50') || 50)
 const historyBackfillMaxPages = Math.max(1, Number(process.env.HISTORY_BACKFILL_MAX_PAGES ?? '3') || 3)
 const historyBackfillTimeoutMs = Math.max(1_000, Number(process.env.HISTORY_BACKFILL_TIMEOUT_MS ?? '15000') || 15_000)
-const enableHistoryBackfill = process.env.ENABLE_HISTORY_BACKFILL !== 'false'
+let backfillEnabled = process.env.ENABLE_HISTORY_BACKFILL !== 'false'
+const backfillControlPort = Math.max(1, Number(process.env.BACKFILL_CONTROL_PORT ?? '8001') || 8001)
 
 if (usePairingCode && !phoneNumber) {
     throw new Error('PHONE_NUMBER is required when USE_PAIRING_CODE=true')
@@ -72,6 +75,7 @@ let ownPnJid = ''
 let ownLidJid = ''
 let authStateKeys: SignalKeyStore | null = null
 let historyBackfillStarted = false
+let activeSock: ReturnType<typeof makeWASocket> | null = null
 
 const pollKey = (key: WAMessageKey) => `${key.remoteJid ?? ''}:${key.id ?? ''}`
 const isGroupJid = (jid: string | null | undefined): jid is string => !!jid && jid.endsWith('@g.us')
@@ -418,7 +422,7 @@ const backfillGroupHistoryFromAnchor = async (
 ) => {
     const groupJid = anchorMessage.key.remoteJid
     const anchorMessageId = anchorMessage.key.id
-    if (!enableHistoryBackfill || !groupJid || !anchorMessageId || !isTargetGroup(groupJid)) {
+    if (!backfillEnabled || !groupJid || !anchorMessageId || !isTargetGroup(groupJid)) {
         return
     }
 
@@ -489,7 +493,7 @@ const backfillGroupHistoryFromAnchor = async (
 }
 
 const backfillKnownGroupHistory = async (sock: ReturnType<typeof makeWASocket>) => {
-    if (!enableHistoryBackfill) {
+    if (!backfillEnabled) {
         logger.info('historical poll backfill disabled by configuration')
         return
     }
@@ -866,6 +870,53 @@ const processPollVoteMessages = async (
     }
 }
 
+const tokenMatches = (a: string, b: string): boolean => {
+    const ab = Buffer.from(a)
+    const bb = Buffer.from(b)
+    return ab.length === bb.length && timingSafeEqual(ab, bb)
+}
+
+const startBackfillControlServer = () => {
+    const server = createServer((req, res) => {
+        res.setHeader('Content-Type', 'application/json')
+
+        const token = req.headers['x-control-token']
+        if (
+            typeof token !== 'string' ||
+            !pythonInternalToken ||
+            !tokenMatches(token, pythonInternalToken)
+        ) {
+            res.writeHead(401)
+            res.end(JSON.stringify({ error: 'Unauthorized' }))
+            return
+        }
+
+        if (req.method === 'POST' && req.url === '/backfill/start') {
+            if (!activeSock) {
+                res.writeHead(503)
+                res.end(JSON.stringify({ error: 'Bridge socket not connected' }))
+                return
+            }
+            backfillEnabled = true
+            historyBackfillStarted = false
+            void backfillKnownGroupHistory(activeSock)
+            res.writeHead(200)
+            res.end(JSON.stringify({ action: 'start', accepted: true }))
+        } else if (req.method === 'POST' && req.url === '/backfill/stop') {
+            backfillEnabled = false
+            res.writeHead(200)
+            res.end(JSON.stringify({ action: 'stop', accepted: true }))
+        } else {
+            res.writeHead(404)
+            res.end(JSON.stringify({ error: 'Not found' }))
+        }
+    })
+
+    server.listen(backfillControlPort, '127.0.0.1', () => {
+        logger.info({ port: backfillControlPort }, 'backfill control server listening')
+    })
+}
+
 const startSock = async () => {
     await loadPollStore()
     const { state, saveCreds } = await useMultiFileAuthState(authDir)
@@ -901,6 +952,7 @@ const startSock = async () => {
         generateHighQualityLinkPreview: false,
         getMessage,
     })
+    activeSock = sock
 
     sock.ws.on('CB:message', (node: { attrs: Record<string, string> }) => {
         const from = node.attrs.from
@@ -1053,6 +1105,7 @@ const startSock = async () => {
 }
 
 await startSock()
+startBackfillControlServer()
 
 process.on('SIGTERM', () => {
     logger.info({ connectionState, targetGroupJid }, 'shutting down poll bridge')

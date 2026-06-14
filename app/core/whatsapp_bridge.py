@@ -143,6 +143,7 @@ class BaileysBridgeProcessManager:
                 'LOG_LEVEL': self._settings.baileys_log_level,
                 'PROTOCOL_LOG_LEVEL': self._settings.baileys_protocol_log_level,
                 'PAIRING_CODE_OUTPUT_PATH': str(pairing_code_output_path) if pairing_code_output_path else '',
+                'BACKFILL_CONTROL_PORT': str(self._settings.backfill_control_port),
             }
         )
 

@@ -1,6 +1,7 @@
 import logging
 import secrets
 
+import httpx
 from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
@@ -8,6 +9,7 @@ from fastapi.security import APIKeyHeader
 from app.core.config import Settings, get_settings
 from app.core.whatsapp_bridge import BaileysBridgeProcessManager
 from app.models.whatsapp import (
+    WhatsAppBackfillActionResponse,
     WhatsAppPairingRequest,
     WhatsAppPairingResponse,
     WhatsAppSessionStatusResponse,
@@ -114,3 +116,65 @@ async def get_whatsapp_status(
         status.target_group_jid,
     )
     return status
+
+
+async def _call_bridge_backfill(action: str, settings: Settings) -> WhatsAppBackfillActionResponse:
+    url = f'http://127.0.0.1:{settings.backfill_control_port}/backfill/{action}'
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                headers={'x-control-token': settings.whatsapp_internal_token or ''},
+                timeout=5.0,
+            )
+    except httpx.ConnectError as exc:
+        logger.error('Backfill control server unreachable action=%s', action)
+        raise HTTPException(status_code=503, detail='Bridge backfill control server is not reachable.') from exc
+
+    if response.status_code == 401:
+        logger.error('Bridge backfill control rejected token action=%s', action)
+        raise HTTPException(status_code=502, detail='Bridge rejected the control token.')
+
+    if response.status_code == 503:
+        logger.warning('Bridge socket not connected for backfill action=%s', action)
+        raise HTTPException(status_code=503, detail='Bridge socket is not connected.')
+
+    if not response.is_success:
+        logger.error('Bridge backfill control returned unexpected status=%s action=%s', response.status_code, action)
+        raise HTTPException(status_code=502, detail=f'Bridge returned unexpected status {response.status_code}.')
+
+    return WhatsAppBackfillActionResponse(action=action, accepted=True)
+
+
+@router.post(
+    '/backfill/start',
+    response_model=WhatsAppBackfillActionResponse,
+    responses={
+        401: {'description': 'Missing or invalid x-api-key header.'},
+        502: {'description': 'Bridge returned an unexpected response.'},
+        503: {'description': 'Bridge backfill control server is not reachable or socket is not connected.'},
+    },
+)
+async def start_history_backfill(
+    _: None = Depends(require_api_key),
+    settings: Settings = Depends(get_settings),
+) -> WhatsAppBackfillActionResponse:
+    logger.info('Received admin request to start history backfill')
+    return await _call_bridge_backfill('start', settings)
+
+
+@router.post(
+    '/backfill/stop',
+    response_model=WhatsAppBackfillActionResponse,
+    responses={
+        401: {'description': 'Missing or invalid x-api-key header.'},
+        502: {'description': 'Bridge returned an unexpected response.'},
+        503: {'description': 'Bridge backfill control server is not reachable.'},
+    },
+)
+async def stop_history_backfill(
+    _: None = Depends(require_api_key),
+    settings: Settings = Depends(get_settings),
+) -> WhatsAppBackfillActionResponse:
+    logger.info('Received admin request to stop history backfill')
+    return await _call_bridge_backfill('stop', settings)
