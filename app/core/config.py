@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     api_key: str | None = None
+    database_url: str | None = None
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
     supabase_poll_history_rpc: str = 'get_poll_user_history'

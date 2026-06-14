@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -21,6 +22,16 @@ logger = Logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+
+    if settings.database_url:
+        from app.core.migrations import run_migrations
+        try:
+            await asyncio.to_thread(run_migrations, settings.database_url)
+        except Exception:
+            logger.exception('Auto-migration failed — continuing startup')
+    else:
+        logger.warning('DATABASE_URL not set — skipping auto migrations')
+
     bridge_manager = BaileysBridgeProcessManager(settings)
     app.state.whatsapp_session_state = WhatsAppSessionStateService()
     app.state.keyword_analysis_state = KeywordAnalysisStateService()
