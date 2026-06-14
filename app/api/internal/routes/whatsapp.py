@@ -129,6 +129,7 @@ async def ingest_message(
     payload: WhatsAppMessageWebhook,
     request: Request,
     _: None = Depends(require_internal_token),
+    settings: Settings = Depends(get_settings),
     service: KeywordAnalysisService = Depends(get_keyword_analysis_service),
 ) -> WhatsAppMessageWebhookResponse:
     state: KeywordAnalysisStateService = get_keyword_analysis_state(request)
@@ -138,6 +139,9 @@ async def ingest_message(
             payload.message_id,
         )
         return WhatsAppMessageWebhookResponse(matched=False)
+
+    if not payload.receiver_phone and settings.whatsapp_phone_number:
+        payload.receiver_phone = settings.whatsapp_phone_number.lstrip('+')
 
     logger.debug(
         'Received internal WhatsApp message message_id=%s sender_phone=%s',
