@@ -79,6 +79,19 @@ let authStateKeys: SignalKeyStore | null = null
 let historyBackfillStarted = false
 let activeSock: ReturnType<typeof makeWASocket> | null = null
 
+const globalContactCache: ContactLookup = new Map()
+
+const updateContactCache = (contacts: Contact[], lidPnMappings?: LIDMapping[]) => {
+    const fresh = buildContactLookup(contacts, lidPnMappings)
+    for (const [jid, info] of fresh) {
+        const existing = globalContactCache.get(jid)
+        globalContactCache.set(jid, {
+            phone: info.phone ?? existing?.phone ?? null,
+            name: info.name ?? existing?.name ?? null,
+        })
+    }
+}
+
 const pollKey = (key: WAMessageKey) => `${key.remoteJid ?? ''}:${key.id ?? ''}`
 const isGroupJid = (jid: string | null | undefined): jid is string => !!jid && jid.endsWith('@g.us')
 const uniqueJids = (...values: Array<string | null | undefined>) => {
@@ -924,9 +937,9 @@ const forwardChatMessages = async (
         if (!text || !message.key.id) continue
 
         const senderJid = message.key.participant || getKeyParticipantAlt(message.key) || message.participant || ''
-        const contactInfo = senderJid ? contactLookup?.get(jidNormalizedUser(senderJid)) : undefined
-        const senderPhone = await resolveVoterPhone(senderJid) ?? contactInfo?.phone ?? null
-        const senderName = message.pushName ?? contactInfo?.name ?? null
+        const cachedContact = senderJid ? (contactLookup?.get(jidNormalizedUser(senderJid)) ?? globalContactCache.get(jidNormalizedUser(senderJid))) : undefined
+        const senderPhone = await resolveVoterPhone(senderJid) ?? cachedContact?.phone ?? null
+        const senderName = message.pushName ?? cachedContact?.name ?? null
         const timestampMs = getMessageTimestampMs(message)
 
         try {
@@ -1133,8 +1146,16 @@ const startSock = async () => {
                 await syncPollCreationMessage(message, 'messaging-history.set')
             }
             const { contacts, lidPnMappings, messages: historyMessages } = events['messaging-history.set']
-            const contactLookup = buildContactLookup(contacts ?? [], lidPnMappings)
-            await forwardChatMessages(historyMessages, sock, contactLookup)
+            updateContactCache(contacts ?? [], lidPnMappings)
+            await forwardChatMessages(historyMessages, sock, globalContactCache)
+        }
+
+        if (events['contacts.upsert']) {
+            updateContactCache(events['contacts.upsert'])
+        }
+
+        if (events['contacts.update']) {
+            updateContactCache(events['contacts.update'].filter((c): c is Contact => !!c.id))
         }
 
         if (events['messages.upsert']) {
