@@ -893,7 +893,7 @@ const forwardChatMessages = async (messages: WAMessage[]) => {
         if (!text || !message.key.id) continue
 
         const senderJid = message.key.participant ?? ''
-        const senderPhone = normalizeVoterPhone(senderJid) ?? null
+        const senderPhone = await resolveVoterPhone(senderJid) ?? null
         const timestampMs = getMessageTimestampMs(message)
 
         try {
