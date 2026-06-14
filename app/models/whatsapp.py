@@ -96,6 +96,21 @@ class WhatsAppKeywordAnalysisActionResponse(BaseModel):
     enabled: bool
 
 
+class WhatsAppKeywordControlRequest(BaseModel):
+    keywords: list[str] = Field(min_length=1)
+    enabled: bool
+
+
+class WhatsAppKeywordControlResult(BaseModel):
+    keyword: str
+    enabled: bool
+    found: bool
+
+
+class WhatsAppKeywordControlResponse(BaseModel):
+    updated: list[WhatsAppKeywordControlResult]
+
+
 @dataclass(slots=True)
 class WhatsAppPollRecord:
     group_jid: str

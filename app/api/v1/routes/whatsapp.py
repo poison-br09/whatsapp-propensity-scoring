@@ -11,12 +11,22 @@ from app.core.whatsapp_bridge import BaileysBridgeProcessManager
 from app.models.whatsapp import (
     WhatsAppBackfillActionResponse,
     WhatsAppKeywordAnalysisActionResponse,
+    WhatsAppKeywordControlRequest,
+    WhatsAppKeywordControlResponse,
+    WhatsAppKeywordControlResult,
     WhatsAppPairingRequest,
     WhatsAppPairingResponse,
     WhatsAppSessionStatusResponse,
 )
+from app.repositories.supabase_poll_repository import SupabasePollRepository
 from app.services.keyword_analysis_state import KeywordAnalysisStateService
 from app.services.whatsapp_session_state import WhatsAppSessionStateService
+
+
+def get_poll_repository(
+    settings: Settings = Depends(get_settings),
+) -> SupabasePollRepository:
+    return SupabasePollRepository(settings)
 
 Logger = logging.getLogger
 logger = Logger(__name__)
@@ -224,3 +234,35 @@ async def stop_keyword_analysis(
     state.disable()
     logger.info('Keyword analysis disabled by admin')
     return WhatsAppKeywordAnalysisActionResponse(action='stop', enabled=False)
+
+
+@router.patch(
+    '/keyword-analysis/keywords',
+    response_model=WhatsAppKeywordControlResponse,
+    responses={
+        401: {'description': 'Missing or invalid x-api-key header.'},
+        422: {'description': 'No keywords provided.'},
+    },
+)
+async def control_keywords(
+    payload: WhatsAppKeywordControlRequest,
+    _: None = Depends(require_api_key),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+) -> WhatsAppKeywordControlResponse:
+    requested = {kw.lower() for kw in payload.keywords}
+    logger.info(
+        'Admin keyword control keywords=%s enabled=%s',
+        list(requested),
+        payload.enabled,
+    )
+    updated_rows = await repository.set_keywords_active(list(requested), payload.enabled)
+    updated_set = {row['keyword'].lower() for row in updated_rows}
+    results = [
+        WhatsAppKeywordControlResult(
+            keyword=kw,
+            enabled=payload.enabled,
+            found=kw.lower() in updated_set,
+        )
+        for kw in payload.keywords
+    ]
+    return WhatsAppKeywordControlResponse(updated=results)

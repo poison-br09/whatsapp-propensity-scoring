@@ -129,12 +129,26 @@ class SupabasePollRepository:
         rows = await asyncio.to_thread(self._fetch_active_keywords)
         return [{'id': str(row['id']), 'keyword': str(row['keyword'])} for row in rows]
 
+    async def set_keywords_active(self, keywords: list[str], enabled: bool) -> list[dict[str, str]]:
+        rows = await asyncio.to_thread(self._update_keywords_active, keywords, enabled)
+        return [{'keyword': str(row['keyword']), 'enabled': str(row['is_active'])} for row in rows]
+
     def _fetch_active_keywords(self) -> list[Any]:
         result = (
             self._get_client()
             .table(self._settings.supabase_whatsapp_keywords_table)
             .select('id,keyword')
             .eq('is_active', True)
+            .execute()
+        )
+        return getattr(result, 'data', result) or []
+
+    def _update_keywords_active(self, keywords: list[str], enabled: bool) -> list[Any]:
+        result = (
+            self._get_client()
+            .table(self._settings.supabase_whatsapp_keywords_table)
+            .update({'is_active': enabled})
+            .in_('keyword', keywords)
             .execute()
         )
         return getattr(result, 'data', result) or []
