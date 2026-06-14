@@ -70,6 +70,11 @@ class WhatsAppSessionStatusResponse(BaseModel):
     pairing_required: bool = False
 
 
+class WhatsAppBackfillActionResponse(BaseModel):
+    action: str
+    accepted: bool
+
+
 @dataclass(slots=True)
 class WhatsAppPollRecord:
     group_jid: str

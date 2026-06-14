@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     baileys_log_level: str = 'trace'
     baileys_protocol_log_level: str = 'error'
     baileys_log_dir: str = 'logs/server'
+    backfill_control_port: int = 8001
 
     model_config = SettingsConfigDict(
         env_file='.env',
