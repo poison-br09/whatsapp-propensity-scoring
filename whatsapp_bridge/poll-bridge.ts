@@ -17,7 +17,9 @@ import makeWASocket, {
     sha256,
     useMultiFileAuthState,
     type ConnectionState,
+    type Contact,
     type GroupMetadata,
+    type LIDMapping,
     type SignalKeyStore,
     type WAMessage,
     type WAMessageContent,
@@ -886,13 +888,23 @@ const getTextContent = (message: WAMessage): string | null => {
 
 type ContactLookup = Map<string, { phone: string | null; name: string | null }>
 
-const buildContactLookup = (contacts: { id?: string | null; lid?: string | null; notify?: string | null; name?: string | null }[]): ContactLookup => {
+const buildContactLookup = (contacts: Contact[], lidPnMappings?: LIDMapping[]): ContactLookup => {
     const map: ContactLookup = new Map()
+    const lidToPhone = new Map<string, string>()
+    for (const m of lidPnMappings ?? []) {
+        if (m.lid && m.pn) lidToPhone.set(jidNormalizedUser(m.lid), normalizeVoterPhone(m.pn) ?? m.pn)
+    }
     for (const c of contacts) {
-        const phone = normalizeVoterPhone(c.id ?? '') ?? null
         const name = c.notify ?? c.name ?? null
-        if (c.id) map.set(jidNormalizedUser(c.id), { phone, name })
-        if (c.lid) map.set(jidNormalizedUser(c.lid), { phone, name })
+        const phone = normalizeVoterPhone(c.phoneNumber ?? '')
+            ?? normalizeVoterPhone(c.id ?? '')
+            ?? (c.lid ? lidToPhone.get(jidNormalizedUser(c.lid)) : undefined)
+            ?? (c.id ? lidToPhone.get(jidNormalizedUser(c.id)) : undefined)
+            ?? null
+        const entry = { phone, name }
+        if (c.id) map.set(jidNormalizedUser(c.id), entry)
+        if (c.lid) map.set(jidNormalizedUser(c.lid), entry)
+        if (c.phoneNumber) map.set(jidNormalizedUser(c.phoneNumber), entry)
     }
     return map
 }
@@ -1120,8 +1132,9 @@ const startSock = async () => {
                 cachePollCreationMessage(message)
                 await syncPollCreationMessage(message, 'messaging-history.set')
             }
-            const contactLookup = buildContactLookup(events['messaging-history.set'].contacts ?? [])
-            await forwardChatMessages(events['messaging-history.set'].messages, sock, contactLookup)
+            const { contacts, lidPnMappings, messages: historyMessages } = events['messaging-history.set']
+            const contactLookup = buildContactLookup(contacts ?? [], lidPnMappings)
+            await forwardChatMessages(historyMessages, sock, contactLookup)
         }
 
         if (events['messages.upsert']) {
