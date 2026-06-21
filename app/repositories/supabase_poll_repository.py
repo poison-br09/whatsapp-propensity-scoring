@@ -129,6 +129,9 @@ class SupabasePollRepository:
         rows = await asyncio.to_thread(self._fetch_active_keywords)
         return [{'id': str(row['id']), 'keyword': str(row['keyword'])} for row in rows]
 
+    async def add_keywords(self, keywords: list[str]) -> list[dict]:
+        return await asyncio.to_thread(self._add_keywords, keywords)
+
     async def set_keywords_active(self, keywords: list[str], enabled: bool) -> list[dict[str, str]]:
         rows = await asyncio.to_thread(self._update_keywords_active, keywords, enabled)
         return [{'keyword': str(row['keyword']), 'enabled': str(row['is_active'])} for row in rows]
@@ -152,6 +155,30 @@ class SupabasePollRepository:
             .execute()
         )
         return getattr(result, 'data', result) or []
+
+    def _add_keywords(self, keywords: list[str]) -> list[dict]:
+        client = self._get_client()
+        table = self._settings.supabase_whatsapp_keywords_table
+        normalized = [kw.lower().strip() for kw in keywords]
+
+        existing_result = (
+            client.table(table)
+            .select('keyword')
+            .in_('keyword', normalized)
+            .execute()
+        )
+        existing = {row['keyword'].lower() for row in (getattr(existing_result, 'data', existing_result) or [])}
+
+        new_keywords = [kw for kw in normalized if kw not in existing]
+        if new_keywords:
+            client.table(table).insert(
+                [{'keyword': kw, 'is_active': True} for kw in new_keywords]
+            ).execute()
+
+        return [
+            {'keyword': kw, 'added': kw not in existing, 'already_existed': kw in existing}
+            for kw in normalized
+        ]
 
     def _insert_keyword_match_payload(self, payload: dict[str, object]) -> Any:
         client = self._get_client()

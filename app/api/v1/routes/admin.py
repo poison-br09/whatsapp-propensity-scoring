@@ -7,6 +7,9 @@ from app.api.deps import get_poll_repository, require_api_key
 from app.core.config import Settings, get_settings
 from app.models.whatsapp import (
     WhatsAppBackfillActionResponse,
+    WhatsAppKeywordAddRequest,
+    WhatsAppKeywordAddResponse,
+    WhatsAppKeywordAddResult,
     WhatsAppKeywordAnalysisActionResponse,
     WhatsAppKeywordControlRequest,
     WhatsAppKeywordControlResponse,
@@ -99,6 +102,25 @@ async def stop_keyword_analysis(
     _get_keyword_analysis_state(request).disable()
     logger.info('Admin: keyword analysis disabled')
     return WhatsAppKeywordAnalysisActionResponse(action='stop', enabled=False)
+
+
+@router.post('/keyword-analysis/keywords', response_model=WhatsAppKeywordAddResponse)
+async def add_keywords(
+    payload: WhatsAppKeywordAddRequest,
+    _: None = Depends(require_api_key),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+) -> WhatsAppKeywordAddResponse:
+    logger.info('Admin: add keywords keywords=%s', payload.keywords)
+    rows = await repository.add_keywords(payload.keywords)
+    results = [
+        WhatsAppKeywordAddResult(
+            keyword=row['keyword'],
+            added=row['added'],
+            already_existed=row['already_existed'],
+        )
+        for row in rows
+    ]
+    return WhatsAppKeywordAddResponse(results=results)
 
 
 @router.patch('/keyword-analysis/keywords', response_model=WhatsAppKeywordControlResponse)
