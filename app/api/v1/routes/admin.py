@@ -138,12 +138,12 @@ async def delete_keywords(
 async def export_matches(
     _: None = Depends(require_api_key),
     repository: SupabasePollRepository = Depends(get_poll_repository),
-    keyword: str = Query(),
+    keyword: list[str] = Query(),
     date_from: str | None = Query(default=None, description='ISO 8601, e.g. 2025-01-01T00:00:00Z'),
     date_to: str | None = Query(default=None, description='ISO 8601, e.g. 2025-12-31T23:59:59Z'),
 ) -> StreamingResponse:
     result = await repository.query_matches(
-        keyword=keyword,
+        keywords=keyword,
         date_from=date_from,
         date_to=date_to,
         limit=10000,
@@ -169,7 +169,7 @@ async def export_matches(
     wb.save(buf)
     buf.seek(0)
 
-    filename = f'matches_{keyword}.xlsx'
+    filename = f'matches_{"_".join(keyword)}.xlsx'
     return StreamingResponse(
         buf,
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

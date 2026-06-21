@@ -141,7 +141,7 @@ class SupabasePollRepository:
         *,
         sender_name: str | None = None,
         sender_phone: str | None = None,
-        keyword: str | None = None,
+        keywords: list[str] | None = None,
         receiver_phone: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
@@ -150,7 +150,7 @@ class SupabasePollRepository:
     ) -> dict:
         return await asyncio.to_thread(
             self._query_matches,
-            sender_name, sender_phone, keyword, receiver_phone, date_from, date_to, limit, offset,
+            sender_name, sender_phone, keywords, receiver_phone, date_from, date_to, limit, offset,
         )
 
     async def add_keywords(self, keywords: list[str]) -> list[dict]:
@@ -186,7 +186,7 @@ class SupabasePollRepository:
         self,
         sender_name: str | None,
         sender_phone: str | None,
-        keyword: str | None,
+        keywords: list[str] | None,
         receiver_phone: str | None,
         date_from: str | None,
         date_to: str | None,
@@ -203,8 +203,9 @@ class SupabasePollRepository:
             q = q.ilike('sender_name', f'%{sender_name}%')
         if sender_phone:
             q = q.ilike('sender_phone', f'%{sender_phone}%')
-        if keyword:
-            q = q.eq('keyword', keyword.lower().strip())
+        if keywords:
+            normalized = [kw.lower().strip() for kw in keywords]
+            q = q.in_('keyword', normalized)
         if receiver_phone:
             q = q.eq('receiver_phone', receiver_phone.strip())
         if date_from:
