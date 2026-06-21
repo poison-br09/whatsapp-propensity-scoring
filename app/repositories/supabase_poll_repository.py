@@ -129,12 +129,92 @@ class SupabasePollRepository:
         rows = await asyncio.to_thread(self._fetch_active_keywords)
         return [{'id': str(row['id']), 'keyword': str(row['keyword'])} for row in rows]
 
+    async def get_all_keywords(self) -> list[dict]:
+        rows = await asyncio.to_thread(self._fetch_all_keywords)
+        return [{'id': str(row['id']), 'keyword': str(row['keyword']), 'is_active': bool(row['is_active'])} for row in rows]
+
+    async def delete_keywords(self, keywords: list[str]) -> list[dict]:
+        return await asyncio.to_thread(self._delete_keywords, keywords)
+
+    async def query_matches(
+        self,
+        *,
+        sender_name: str | None = None,
+        sender_phone: str | None = None,
+        keyword: str | None = None,
+        receiver_phone: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        return await asyncio.to_thread(
+            self._query_matches,
+            sender_name, sender_phone, keyword, receiver_phone, date_from, date_to, limit, offset,
+        )
+
     async def add_keywords(self, keywords: list[str]) -> list[dict]:
         return await asyncio.to_thread(self._add_keywords, keywords)
 
     async def set_keywords_active(self, keywords: list[str], enabled: bool) -> list[dict[str, str]]:
         rows = await asyncio.to_thread(self._update_keywords_active, keywords, enabled)
         return [{'keyword': str(row['keyword']), 'enabled': str(row['is_active'])} for row in rows]
+
+    def _fetch_all_keywords(self) -> list[Any]:
+        result = (
+            self._get_client()
+            .table(self._settings.supabase_whatsapp_keywords_table)
+            .select('id,keyword,is_active')
+            .order('keyword')
+            .execute()
+        )
+        return getattr(result, 'data', result) or []
+
+    def _delete_keywords(self, keywords: list[str]) -> list[dict]:
+        normalized = [kw.lower().strip() for kw in keywords]
+        result = (
+            self._get_client()
+            .table(self._settings.supabase_whatsapp_keywords_table)
+            .delete()
+            .in_('keyword', normalized)
+            .execute()
+        )
+        deleted_set = {row['keyword'].lower() for row in (getattr(result, 'data', result) or [])}
+        return [{'keyword': kw, 'deleted': kw in deleted_set} for kw in normalized]
+
+    def _query_matches(
+        self,
+        sender_name: str | None,
+        sender_phone: str | None,
+        keyword: str | None,
+        receiver_phone: str | None,
+        date_from: str | None,
+        date_to: str | None,
+        limit: int,
+        offset: int,
+    ) -> dict:
+        client = self._get_client()
+        table = self._settings.supabase_whatsapp_keyword_match_table
+        q = client.table(table).select(
+            'keyword,sender_name,sender_phone,message,message_date,receiver_phone',
+            count='exact',
+        )
+        if sender_name:
+            q = q.ilike('sender_name', f'%{sender_name}%')
+        if sender_phone:
+            q = q.ilike('sender_phone', f'%{sender_phone}%')
+        if keyword:
+            q = q.eq('keyword', keyword.lower().strip())
+        if receiver_phone:
+            q = q.eq('receiver_phone', receiver_phone.strip())
+        if date_from:
+            q = q.gte('message_date', date_from)
+        if date_to:
+            q = q.lte('message_date', date_to)
+        result = q.order('message_date', desc=True).range(offset, offset + limit - 1).execute()
+        rows = getattr(result, 'data', result) or []
+        total = getattr(result, 'count', None) or 0
+        return {'rows': rows, 'total': total}
 
     def _fetch_active_keywords(self) -> list[Any]:
         result = (

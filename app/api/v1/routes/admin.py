@@ -1,7 +1,7 @@
 import logging
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import get_poll_repository, require_api_key
 from app.core.config import Settings, get_settings
@@ -14,6 +14,13 @@ from app.models.whatsapp import (
     WhatsAppKeywordControlRequest,
     WhatsAppKeywordControlResponse,
     WhatsAppKeywordControlResult,
+    WhatsAppKeywordDeleteRequest,
+    WhatsAppKeywordDeleteResponse,
+    WhatsAppKeywordDeleteResult,
+    WhatsAppKeywordItem,
+    WhatsAppKeywordListResponse,
+    WhatsAppMatchItem,
+    WhatsAppMatchQueryResponse,
     WhatsAppPropensityActionResponse,
 )
 from app.repositories.supabase_poll_repository import SupabasePollRepository
@@ -102,6 +109,65 @@ async def stop_keyword_analysis(
     _get_keyword_analysis_state(request).disable()
     logger.info('Admin: keyword analysis disabled')
     return WhatsAppKeywordAnalysisActionResponse(action='stop', enabled=False)
+
+
+@router.get('/keyword-analysis/keywords', response_model=WhatsAppKeywordListResponse)
+async def list_keywords(
+    _: None = Depends(require_api_key),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+) -> WhatsAppKeywordListResponse:
+    rows = await repository.get_all_keywords()
+    keywords = [WhatsAppKeywordItem(id=row['id'], keyword=row['keyword'], is_active=row['is_active']) for row in rows]
+    return WhatsAppKeywordListResponse(keywords=keywords)
+
+
+@router.delete('/keyword-analysis/keywords', response_model=WhatsAppKeywordDeleteResponse)
+async def delete_keywords(
+    payload: WhatsAppKeywordDeleteRequest,
+    _: None = Depends(require_api_key),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+) -> WhatsAppKeywordDeleteResponse:
+    logger.info('Admin: delete keywords keywords=%s', payload.keywords)
+    rows = await repository.delete_keywords(payload.keywords)
+    results = [WhatsAppKeywordDeleteResult(keyword=row['keyword'], deleted=row['deleted']) for row in rows]
+    return WhatsAppKeywordDeleteResponse(results=results)
+
+
+@router.get('/keyword-analysis/matches', response_model=WhatsAppMatchQueryResponse)
+async def query_matches(
+    _: None = Depends(require_api_key),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+    sender_name: str | None = Query(default=None),
+    sender_phone: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+    receiver_phone: str | None = Query(default=None),
+    date_from: str | None = Query(default=None, description='ISO 8601 date-time, e.g. 2025-01-01T00:00:00Z'),
+    date_to: str | None = Query(default=None, description='ISO 8601 date-time, e.g. 2025-12-31T23:59:59Z'),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> WhatsAppMatchQueryResponse:
+    result = await repository.query_matches(
+        sender_name=sender_name,
+        sender_phone=sender_phone,
+        keyword=keyword,
+        receiver_phone=receiver_phone,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        offset=offset,
+    )
+    matches = [
+        WhatsAppMatchItem(
+            keyword=row['keyword'],
+            sender_name=row.get('sender_name'),
+            sender_phone=row.get('sender_phone'),
+            message=row['message'],
+            message_date=row['message_date'],
+            receiver_phone=row.get('receiver_phone'),
+        )
+        for row in result['rows']
+    ]
+    return WhatsAppMatchQueryResponse(matches=matches, total=result['total'])
 
 
 @router.post('/keyword-analysis/keywords', response_model=WhatsAppKeywordAddResponse)

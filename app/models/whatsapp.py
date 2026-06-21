@@ -102,6 +102,55 @@ class WhatsAppPropensityActionResponse(BaseModel):
     enabled: bool
 
 
+class WhatsAppKeywordAddRequest(BaseModel):
+    keywords: list[str] = Field(min_length=1)
+
+class WhatsAppKeywordAddResult(BaseModel):
+    keyword: str
+    added: bool
+    already_existed: bool
+
+class WhatsAppKeywordAddResponse(BaseModel):
+    results: list[WhatsAppKeywordAddResult]
+
+
+class WhatsAppKeywordItem(BaseModel):
+    id: str
+    keyword: str
+    is_active: bool
+
+
+class WhatsAppKeywordListResponse(BaseModel):
+    keywords: list[WhatsAppKeywordItem]
+
+
+class WhatsAppKeywordDeleteRequest(BaseModel):
+    keywords: list[str] = Field(min_length=1)
+
+
+class WhatsAppKeywordDeleteResult(BaseModel):
+    keyword: str
+    deleted: bool
+
+
+class WhatsAppKeywordDeleteResponse(BaseModel):
+    results: list[WhatsAppKeywordDeleteResult]
+
+
+class WhatsAppMatchItem(BaseModel):
+    keyword: str
+    sender_name: str | None
+    sender_phone: str | None
+    message: str
+    message_date: str
+    receiver_phone: str | None
+
+
+class WhatsAppMatchQueryResponse(BaseModel):
+    matches: list[WhatsAppMatchItem]
+    total: int
+
+
 class WhatsAppKeywordControlRequest(BaseModel):
     keywords: list[str] = Field(min_length=1)
     enabled: bool
