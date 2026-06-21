@@ -31,3 +31,4 @@ htmlcov/
 prd*
 node_modules/
 baileys_auth_info/
+whatsapp_bridge/poll_store.json
