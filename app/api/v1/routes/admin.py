@@ -1,7 +1,10 @@
+import io
 import logging
 
 import httpx
+import openpyxl
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_poll_repository, require_api_key
 from app.core.config import Settings, get_settings
@@ -19,8 +22,6 @@ from app.models.whatsapp import (
     WhatsAppKeywordDeleteResult,
     WhatsAppKeywordItem,
     WhatsAppKeywordListResponse,
-    WhatsAppMatchItem,
-    WhatsAppMatchQueryResponse,
     WhatsAppPropensityActionResponse,
 )
 from app.repositories.supabase_poll_repository import SupabasePollRepository
@@ -133,41 +134,47 @@ async def delete_keywords(
     return WhatsAppKeywordDeleteResponse(results=results)
 
 
-@router.get('/keyword-analysis/matches', response_model=WhatsAppMatchQueryResponse)
-async def query_matches(
+@router.get('/keyword-analysis/matches/export')
+async def export_matches(
     _: None = Depends(require_api_key),
     repository: SupabasePollRepository = Depends(get_poll_repository),
-    sender_name: str | None = Query(default=None),
-    sender_phone: str | None = Query(default=None),
-    keyword: str | None = Query(default=None),
-    receiver_phone: str | None = Query(default=None),
-    date_from: str | None = Query(default=None, description='ISO 8601 date-time, e.g. 2025-01-01T00:00:00Z'),
-    date_to: str | None = Query(default=None, description='ISO 8601 date-time, e.g. 2025-12-31T23:59:59Z'),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-) -> WhatsAppMatchQueryResponse:
+    keyword: str = Query(),
+    date_from: str | None = Query(default=None, description='ISO 8601, e.g. 2025-01-01T00:00:00Z'),
+    date_to: str | None = Query(default=None, description='ISO 8601, e.g. 2025-12-31T23:59:59Z'),
+) -> StreamingResponse:
     result = await repository.query_matches(
-        sender_name=sender_name,
-        sender_phone=sender_phone,
         keyword=keyword,
-        receiver_phone=receiver_phone,
         date_from=date_from,
         date_to=date_to,
-        limit=limit,
-        offset=offset,
+        limit=10000,
+        offset=0,
     )
-    matches = [
-        WhatsAppMatchItem(
-            keyword=row['keyword'],
-            sender_name=row.get('sender_name'),
-            sender_phone=row.get('sender_phone'),
-            message=row['message'],
-            message_date=row['message_date'],
-            receiver_phone=row.get('receiver_phone'),
-        )
-        for row in result['rows']
-    ]
-    return WhatsAppMatchQueryResponse(matches=matches, total=result['total'])
+    rows = result['rows']
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Matches'
+    ws.append(['Keyword', 'Sender Name', 'Sender Phone', 'Receiver Phone', 'Message', 'Message Date'])
+    for row in rows:
+        ws.append([
+            row.get('keyword'),
+            row.get('sender_name'),
+            row.get('sender_phone'),
+            row.get('receiver_phone'),
+            row.get('message'),
+            row.get('message_date'),
+        ])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    filename = f'matches_{keyword}.xlsx'
+    return StreamingResponse(
+        buf,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post('/keyword-analysis/keywords', response_model=WhatsAppKeywordAddResponse)
