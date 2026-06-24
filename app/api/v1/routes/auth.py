@@ -2,12 +2,12 @@ import asyncio
 import logging
 import re
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from supabase import create_client
 
-from app.core.auth import create_access_token, hash_password, verify_password
+from app.core.auth import create_access_token, hash_password, require_superadmin, verify_password
 from app.core.config import Settings, get_settings
-from app.models.user import UserLoginRequest, UserLoginResponse, UserRegisterRequest
+from app.models.user import UserLoginRequest, UserLoginResponse, UserProfile, UserRegisterRequest
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,11 @@ def _get_supabase(settings: Settings):
 
 
 @router.post('/register', response_model=UserLoginResponse)
-async def register(payload: UserRegisterRequest, request: Request) -> UserLoginResponse:
+async def register(
+    payload: UserRegisterRequest,
+    request: Request,
+    _: UserProfile = Depends(require_superadmin),
+) -> UserLoginResponse:
     settings = get_settings()
     normalized_phone = re.sub(r'\D', '', payload.whatsapp_phone)
 
