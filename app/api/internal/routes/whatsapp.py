@@ -4,6 +4,7 @@ import secrets
 from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
+from app.core.bridge_pool import BridgePool
 from app.core.config import Settings, get_settings
 from app.models.whatsapp import (
     WhatsAppMessageWebhook,
@@ -20,7 +21,6 @@ from app.services.email_service import EmailService
 from app.services.keyword_analysis_service import KeywordAnalysisService
 from app.services.keyword_analysis_state import KeywordAnalysisStateService
 from app.services.propensity_scoring_state import PropensityScoringStateService
-from app.services.whatsapp_session_state import WhatsAppSessionStateService
 from app.services.whatsapp_poll_ingestion_service import WhatsAppPollIngestionService
 
 Logger = logging.getLogger
@@ -45,14 +45,6 @@ def get_email_service(
     settings: Settings = Depends(get_settings),
 ) -> EmailService:
     return EmailService(settings)
-
-
-def get_session_state_service(request: Request) -> WhatsAppSessionStateService:
-    session_state_service = getattr(request.app.state, 'whatsapp_session_state', None)
-    if session_state_service is None:
-        raise HTTPException(status_code=503, detail='WhatsApp session state service is unavailable.')
-
-    return session_state_service
 
 
 def get_keyword_analysis_state(request: Request) -> KeywordAnalysisStateService:
@@ -154,9 +146,9 @@ async def ingest_message(
 @router.post('/session-event', response_model=WhatsAppSessionEventWebhookResponse)
 async def ingest_session_event(
     payload: WhatsAppSessionEventWebhook,
+    request: Request,
     _: None = Depends(require_internal_token),
     email_service: EmailService = Depends(get_email_service),
-    session_state_service: WhatsAppSessionStateService = Depends(get_session_state_service),
 ) -> WhatsAppSessionEventWebhookResponse:
     logger.info(
         'Received internal WhatsApp session event event=%s phone_number=%s status_code=%s',
@@ -164,7 +156,15 @@ async def ingest_session_event(
         payload.phone_number,
         payload.status_code,
     )
-    session_state_service.record_event(payload)
+    pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
+    if pool is not None and payload.phone_number:
+        state = pool.get_session_state_by_phone(payload.phone_number)
+        if state is not None:
+            state.record_event(payload)
+        else:
+            logger.warning('No session state found for phone_number=%s', payload.phone_number)
+    else:
+        logger.warning('Bridge pool unavailable or no phone_number in session event')
 
     if payload.event != 'logged_out':
         return WhatsAppSessionEventWebhookResponse(accepted=True, email_sent=False)

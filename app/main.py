@@ -14,7 +14,6 @@ from app.core.config import get_settings
 from app.core.logging_setup import configure_logging
 from app.services.keyword_analysis_state import KeywordAnalysisStateService
 from app.services.propensity_scoring_state import PropensityScoringStateService
-from app.services.whatsapp_session_state import WhatsAppSessionStateService
 
 Logger = logging.getLogger
 logger = Logger(__name__)
@@ -27,7 +26,6 @@ async def lifespan(app: FastAPI):
     bridge_pool = BridgePool(settings)
     app.state.bridge_pool = bridge_pool
     app.state.bridge_manager = None
-    app.state.whatsapp_session_state = WhatsAppSessionStateService()
     app.state.keyword_analysis_state = KeywordAnalysisStateService()
     app.state.propensity_scoring_state = PropensityScoringStateService()
 

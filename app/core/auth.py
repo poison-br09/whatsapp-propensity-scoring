@@ -2,15 +2,14 @@ from datetime import datetime, timedelta
 
 import jwt
 from fastapi import Depends, HTTPException
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 
 from app.core.config import Settings, get_settings
 from app.models.user import UserProfile
 
 _pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl='/api/v1/auth/login')
+_bearer_scheme = HTTPBearer()
 
 
 def hash_password(plain: str) -> str:
@@ -50,10 +49,10 @@ def decode_access_token(token: str, settings: Settings) -> dict:
 
 
 def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
     settings: Settings = Depends(get_settings),
 ) -> UserProfile:
-    payload = decode_access_token(token, settings)
+    payload = decode_access_token(credentials.credentials, settings)
     return UserProfile(
         user_id=payload['sub'],
         username=payload['username'],

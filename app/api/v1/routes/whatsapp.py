@@ -11,7 +11,6 @@ from app.models.whatsapp import (
     WhatsAppPairingResponse,
     WhatsAppSessionStatusResponse,
 )
-from app.services.whatsapp_session_state import WhatsAppSessionStateService
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +25,6 @@ def _get_bridge_for_user(request: Request, user_id: str) -> BaileysBridgeProcess
     if bridge is None:
         raise HTTPException(status_code=404, detail='No WhatsApp session found for this account. Register first.')
     return bridge
-
-
-def get_session_state_service(request: Request) -> WhatsAppSessionStateService:
-    session_state_service = getattr(request.app.state, 'whatsapp_session_state', None)
-    if session_state_service is None:
-        raise HTTPException(status_code=503, detail='WhatsApp session state service is unavailable.')
-    return session_state_service
 
 
 @router.post(
@@ -73,19 +65,25 @@ async def request_whatsapp_pairing_code(
     response_model=WhatsAppSessionStatusResponse,
     responses={
         401: {'description': 'Missing or invalid token.'},
-        503: {'description': 'WhatsApp session state is unavailable.'},
+        404: {'description': 'No WhatsApp session found for this account.'},
+        503: {'description': 'Bridge pool is unavailable.'},
     },
 )
 async def get_whatsapp_status(
+    request: Request,
     current_user: UserProfile = Depends(get_current_user),
-    session_state_service: WhatsAppSessionStateService = Depends(get_session_state_service),
 ) -> WhatsAppSessionStatusResponse:
-    status = session_state_service.get_status()
+    pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail='Bridge pool is unavailable.')
+    state = pool.get_session_state(current_user.user_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail='No WhatsApp session found for this account.')
+    status = state.get_status()
     logger.info(
-        'Returned WhatsApp status status=%s pairing_required=%s target_group_jid=%s user_id=%s',
+        'Returned WhatsApp status status=%s pairing_required=%s user_id=%s',
         status.status,
         status.pairing_required,
-        status.target_group_jid,
         current_user.user_id,
     )
     return status
