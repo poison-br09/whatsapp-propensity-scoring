@@ -1,5 +1,4 @@
 import logging
-from pathlib import Path
 
 from app.core.config import Settings
 from app.core.whatsapp_bridge import BaileysBridgeProcessManager
@@ -49,6 +48,10 @@ class BridgePool:
     def stop_all(self) -> None:
         for user_id in list(self._bridges):
             self.stop_bridge(user_id)
+
+    def get_backfill_port(self, user_id: str) -> int | None:
+        bridge = self._bridges.get(user_id)
+        return bridge._backfill_port if bridge else None
 
     def all_bridges(self) -> dict[str, BaileysBridgeProcessManager]:
         return dict(self._bridges)

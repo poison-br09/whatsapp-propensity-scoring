@@ -1,20 +1,100 @@
-# Frontend Build Guide — WhatsApp Propensity Scoring Admin
+# Frontend Build Guide — WhatsApp Monitoring (Multi-User)
 
 ## Overview
 
-This is a single-page admin dashboard. It manages a WhatsApp bot that monitors group messages for configured keywords and exports matches. It also manages the WhatsApp session (login via pairing code) and controls background services.
+A multi-user dashboard for a WhatsApp group monitoring system. Each user monitors their own WhatsApp session and sees only their own keyword matches. Superadmins see all matches and can manage users.
 
 ---
 
 ## Auth
 
-Every request requires the header:
+### Login / Register
 
-```
-x-api-key: <API_KEY>
+**POST `/api/v1/auth/register`**
+
+Request:
+```json
+{
+  "username": "alice",
+  "password": "secret123",
+  "whatsapp_phone": "919876543210",
+  "target_group_jid": "120363XXXXXX@g.us"
+}
 ```
 
-All endpoints return `401` if the key is missing or wrong.
+| Field | Type | Notes |
+|---|---|---|
+| `username` | `string` | 3–50 chars |
+| `password` | `string` | Min 8 chars |
+| `whatsapp_phone` | `string` | Min 6 chars, digits only recommended |
+| `target_group_jid` | `string \| null` | Optional. WhatsApp group JID to monitor |
+
+Response `200`:
+```json
+{
+  "access_token": "<jwt>",
+  "token_type": "bearer",
+  "role": "user",
+  "whatsapp_phone": "919876543210"
+}
+```
+
+Error `409`: username or phone already registered.
+
+---
+
+**POST `/api/v1/auth/login`**
+
+Request:
+```json
+{
+  "username": "alice",
+  "password": "secret123"
+}
+```
+
+Response `200`: same shape as register.
+
+Error `401`: invalid credentials or deactivated account.
+
+---
+
+### Using the token
+
+Store the JWT in `localStorage` or in memory (not cookies — no CSRF needed).
+
+All protected endpoints require:
+```
+Authorization: Bearer <access_token>
+```
+
+**Decode the JWT payload** (base64-decode the middle segment) to read `role` and `phone` — avoid re-fetching the profile on every render.
+
+JWT payload fields:
+| Field | Type | Notes |
+|---|---|---|
+| `sub` | `string` | User UUID |
+| `username` | `string` | |
+| `role` | `string` | `"user"` or `"superadmin"` |
+| `phone` | `string` | `whatsapp_phone` |
+| `group_jid` | `string \| null` | Target group JID |
+| `exp` | `number` | Unix expiry timestamp |
+
+---
+
+## Auth header matrix
+
+| Endpoint group | Auth method |
+|---|---|
+| `POST /api/v1/auth/register`, `POST /api/v1/auth/login` | None |
+| `GET /api/v1/whatsapp/status` | `Authorization: Bearer <token>` |
+| `POST /api/v1/whatsapp/pairing-code` | `Authorization: Bearer <token>` |
+| `GET /admin/keyword-analysis/matches/export` | `Authorization: Bearer <token>` |
+| `POST /admin/backfill/start`, `POST /admin/backfill/stop` | `Authorization: Bearer <token>` |
+| `GET /admin/users`, `PATCH /admin/users/{id}/deactivate` | `Authorization: Bearer <token>` (superadmin only) |
+| `GET/POST/PATCH/DELETE /admin/keyword-analysis/keywords` | `x-api-key: <API_KEY>` |
+| `POST /admin/keyword-analysis/start`, `POST /admin/keyword-analysis/stop` | `x-api-key: <API_KEY>` |
+| `POST /admin/propensity/start`, `POST /admin/propensity/stop` | `x-api-key: <API_KEY>` |
 
 ---
 
@@ -24,19 +104,22 @@ All endpoints return `401` if the key is missing or wrong.
 https://<your-domain>/api/v1
 ```
 
-Use an environment variable `VITE_API_BASE_URL` (or equivalent) for the base URL.
+Use `VITE_API_BASE_URL` for the base URL.
 
 ---
 
 ## Pages / Sections
 
-Suggested layout:
+### User dashboard
+1. **Session** — own WhatsApp status + pairing code
+2. **Keyword Analysis** — export own matches only
+3. **Backfill** — trigger own bridge history sync
 
-1. **Session** — WhatsApp login status + pairing code
-2. **Keywords** — list, add, enable/disable, delete
-3. **Keyword Analysis** — on/off toggle + export matches
-4. **Backfill** — trigger history sync
-5. **Propensity Scoring** — on/off toggle
+### Superadmin dashboard
+All user pages, plus:
+4. **Keywords** — list, add, enable/disable, delete (requires `VITE_API_KEY`)
+5. **All Matches** — export with no receiver filter
+6. **Users** — list all users, deactivate accounts
 
 ---
 
@@ -45,7 +128,7 @@ Suggested layout:
 ### 1. WhatsApp Session
 
 #### GET `/whatsapp/status`
-Returns current WhatsApp session state.
+Returns global WhatsApp session state. Same response for all authenticated users.
 
 **Response `200`**
 ```json
@@ -71,18 +154,12 @@ Returns current WhatsApp session state.
 ---
 
 #### POST `/whatsapp/pairing-code`
-Triggers a new pairing code for the given phone number. This restarts the WhatsApp bridge — takes ~5–10 seconds.
+Restarts the calling user's WhatsApp bridge and requests a pairing code. Takes ~5–10 seconds.
 
 **Request body**
 ```json
-{
-  "phone_number": "919876543210"
-}
+{ "phone_number": "919876543210" }
 ```
-
-| Field | Type | Validation |
-|---|---|---|
-| `phone_number` | `string` | Min 6 chars. Digits only (no `+` or spaces needed — stripped automatically) |
 
 **Response `200`**
 ```json
@@ -96,23 +173,22 @@ Triggers a new pairing code for the given phone number. This restarts the WhatsA
 **Error responses**
 | Code | Meaning |
 |---|---|
-| `400` | Invalid phone number (no digits) |
-| `503` | Bridge process unavailable |
+| `400` | Invalid phone number |
+| `404` | No WhatsApp session registered for this account |
+| `503` | Bridge pool unavailable |
 | `504` | Timed out waiting for code (30 s) |
 
 ---
 
-### 2. Keywords
+### 2. Keywords (x-api-key only)
 
 #### GET `/admin/keyword-analysis/keywords`
-Returns all keywords — active and inactive.
-
 **Response `200`**
 ```json
 {
   "keywords": [
     { "id": "uuid", "keyword": "flat", "is_active": true },
-    { "id": "uuid", "keyword": "pg", "is_active": false }
+    { "id": "uuid", "keyword": "pg",   "is_active": false }
   ]
 }
 ```
@@ -120,13 +196,9 @@ Returns all keywords — active and inactive.
 ---
 
 #### POST `/admin/keyword-analysis/keywords`
-Add one or more new keywords. Already-existing keywords are not duplicated.
-
 **Request body**
 ```json
-{
-  "keywords": ["flat", "rent", "pg"]
-}
+{ "keywords": ["flat", "rent", "pg"] }
 ```
 
 **Response `200`**
@@ -134,8 +206,7 @@ Add one or more new keywords. Already-existing keywords are not duplicated.
 {
   "results": [
     { "keyword": "flat", "added": false, "already_existed": true },
-    { "keyword": "rent", "added": true,  "already_existed": false },
-    { "keyword": "pg",   "added": true,  "already_existed": false }
+    { "keyword": "rent", "added": true,  "already_existed": false }
   ]
 }
 ```
@@ -143,14 +214,9 @@ Add one or more new keywords. Already-existing keywords are not duplicated.
 ---
 
 #### PATCH `/admin/keyword-analysis/keywords`
-Enable or disable existing keywords.
-
 **Request body**
 ```json
-{
-  "keywords": ["flat", "pg"],
-  "enabled": false
-}
+{ "keywords": ["flat", "pg"], "enabled": false }
 ```
 
 **Response `200`**
@@ -163,18 +229,14 @@ Enable or disable existing keywords.
 }
 ```
 
-`found: false` means the keyword does not exist in the table.
+`found: false` means the keyword does not exist.
 
 ---
 
 #### DELETE `/admin/keyword-analysis/keywords`
-Permanently delete keywords.
-
 **Request body**
 ```json
-{
-  "keywords": ["flat", "pg"]
-}
+{ "keywords": ["flat", "pg"] }
 ```
 
 **Response `200`**
@@ -187,26 +249,16 @@ Permanently delete keywords.
 }
 ```
 
-`deleted: false` means the keyword was not found (already gone).
-
 ---
 
-### 3. Keyword Analysis Toggle
+### 3. Keyword Analysis Toggle (x-api-key only)
 
 #### POST `/admin/keyword-analysis/start`
-Enable live keyword matching.
-
-**Response `200`**
 ```json
 { "action": "start", "enabled": true }
 ```
 
----
-
 #### POST `/admin/keyword-analysis/stop`
-Disable live keyword matching.
-
-**Response `200`**
 ```json
 { "action": "stop", "enabled": false }
 ```
@@ -216,7 +268,9 @@ Disable live keyword matching.
 ### 4. Matches Export
 
 #### GET `/admin/keyword-analysis/matches/export`
-Download matched messages as an Excel file (`.xlsx`).
+Auth: `Authorization: Bearer <token>`
+
+Role-scoped: `user` gets only their own `receiver_phone` rows; `superadmin` gets all.
 
 **Query parameters**
 
@@ -226,114 +280,13 @@ Download matched messages as an Excel file (`.xlsx`).
 | `date_from` | `string` | No | ISO 8601, e.g. `2025-01-01T00:00:00Z` |
 | `date_to` | `string` | No | ISO 8601, e.g. `2025-12-31T23:59:59Z` |
 
-**Response `200`**
+**Response `200`** — binary Excel file (`.xlsx`)
 - Content-Type: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
 - Content-Disposition: `attachment; filename="matches_flat_rent.xlsx"`
-- Body: binary Excel file
 
-**Excel columns (in order):** Keyword · Sender Name · Sender Phone · Receiver Phone · Message · Message Date
+**Excel columns:** Keyword · Sender Name · Sender Phone · Receiver Phone · Message · Message Date
 
-**Frontend note:** trigger the download by constructing a URL with the query params and either setting `window.location.href` or using a hidden `<a download>` click. Do not use `fetch` unless you handle the binary blob manually.
-
----
-
-### 5. History Backfill
-
-#### POST `/admin/backfill/start`
-Tell the WhatsApp bridge to start syncing message history.
-
-**Response `200`**
-```json
-{ "action": "start", "accepted": true }
-```
-
-**Error responses**
-| Code | Meaning |
-|---|---|
-| `503` | Bridge backfill control server not reachable |
-
----
-
-#### POST `/admin/backfill/stop`
-Stop the history sync.
-
-**Response `200`**
-```json
-{ "action": "stop", "accepted": true }
-```
-
----
-
-### 6. Propensity Scoring Toggle
-
-#### POST `/admin/propensity/start`
-Enable propensity scoring on poll votes.
-
-**Response `200`**
-```json
-{ "action": "start", "enabled": true }
-```
-
----
-
-#### POST `/admin/propensity/stop`
-Disable propensity scoring.
-
-**Response `200`**
-```json
-{ "action": "stop", "enabled": false }
-```
-
----
-
-## Common Error Shape
-
-All errors return JSON:
-
-```json
-{ "detail": "Human-readable error message." }
-```
-
----
-
-## Recommended Tech Stack
-
-- **Framework:** React + TypeScript (Vite)
-- **HTTP client:** `axios` or native `fetch` with a wrapper that injects `x-api-key`
-- **UI:** Tailwind CSS + shadcn/ui
-- **State:** React Query (`@tanstack/react-query`) for server state — cache `GET /keywords` and `GET /status`, invalidate on mutations
-- **Excel download:** construct URL directly, use `<a href={url} download>` pattern (avoid fetching binary through React Query)
-- **Date pickers:** use ISO 8601 strings — backend expects UTC timestamps
-
----
-
-## API Client Skeleton
-
-```typescript
-const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL + '/api/v1',
-  headers: { 'x-api-key': import.meta.env.VITE_API_KEY },
-})
-
-// Excel export — do NOT go through axios
-export function buildExportUrl(keywords: string[], dateFrom?: string, dateTo?: string): string {
-  const params = new URLSearchParams()
-  keywords.forEach(k => params.append('keyword', k))
-  if (dateFrom) params.set('date_from', dateFrom)
-  if (dateTo) params.set('date_to', dateTo)
-  return `${import.meta.env.VITE_API_BASE_URL}/api/v1/admin/keyword-analysis/matches/export?${params}`
-}
-```
-
----
-
-## Notes for the Frontend Agent
-
-- The `x-api-key` header must be sent on **every** request including GETs.
-- `GET /whatsapp/status` should be polled every 5 seconds on the Session page to reflect connection changes.
-- When `pairing_required: true` is returned from `/status`, show the pairing code form prominently.
-- Keyword operations (add, patch, delete) should all invalidate the `GET /keywords` query so the list refreshes automatically.
-- The Excel export URL must include the `x-api-key` as a query param OR the download must be done via `fetch` + blob — since headers cannot be set on `<a href>` clicks. Recommended approach: fetch the file through axios, create a blob URL, and trigger download programmatically:
+**Frontend note:** fetch via `axios` with `responseType: 'blob'` and trigger download programmatically (the `Authorization` header cannot be sent via `<a href>` click):
 
 ```typescript
 const response = await api.get('/admin/keyword-analysis/matches/export', {
@@ -346,3 +299,153 @@ a.download = 'matches.xlsx'
 a.click()
 URL.revokeObjectURL(url)
 ```
+
+---
+
+### 5. History Backfill
+
+Auth: `Authorization: Bearer <token>`. Scoped to the calling user's bridge. Superadmin targets the default bridge port.
+
+#### POST `/admin/backfill/start`
+**Response `200`**
+```json
+{ "action": "start", "accepted": true }
+```
+
+#### POST `/admin/backfill/stop`
+**Response `200`**
+```json
+{ "action": "stop", "accepted": true }
+```
+
+**Error responses**
+| Code | Meaning |
+|---|---|
+| `404` | No bridge session registered for this account |
+| `503` | Bridge backfill control server not reachable |
+
+---
+
+### 6. Propensity Scoring Toggle (x-api-key only)
+
+#### POST `/admin/propensity/start`
+```json
+{ "action": "start", "enabled": true }
+```
+
+#### POST `/admin/propensity/stop`
+```json
+{ "action": "stop", "enabled": false }
+```
+
+---
+
+### 7. User Management (superadmin only)
+
+#### GET `/admin/users`
+Auth: `Authorization: Bearer <token>` (superadmin role required, returns `403` otherwise)
+
+**Response `200`**
+```json
+{
+  "users": [
+    {
+      "id": "uuid",
+      "username": "alice",
+      "whatsapp_phone": "919876543210",
+      "target_group_jid": "120363XXXXXX@g.us",
+      "role": "user",
+      "is_active": true,
+      "created_at": "2025-06-01T10:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+#### PATCH `/admin/users/{user_id}/deactivate`
+Auth: `Authorization: Bearer <token>` (superadmin only)
+
+Deactivates the user's account and stops their WhatsApp bridge.
+
+**Response `200`**
+```json
+{ "user_id": "uuid", "deactivated": true }
+```
+
+---
+
+## Common Error Shape
+
+```json
+{ "detail": "Human-readable error message." }
+```
+
+| Code | Meaning |
+|---|---|
+| `401` | Missing/invalid/expired token or API key |
+| `403` | Authenticated but insufficient role |
+| `404` | Resource not found (e.g. no bridge session) |
+| `409` | Conflict (duplicate username/phone on register) |
+| `503` | Backend service unavailable |
+
+---
+
+## Recommended Tech Stack
+
+- **Framework:** React + TypeScript (Vite)
+- **HTTP client:** `axios` — create two instances: one with `Authorization: Bearer` for JWT endpoints, one with `x-api-key` for keyword management
+- **UI:** Tailwind CSS + shadcn/ui
+- **State:** React Query (`@tanstack/react-query`) — cache `GET /keywords` and `GET /status`, invalidate on mutations
+- **Auth state:** decode JWT locally (e.g. `jwt-decode`) — do not re-fetch the profile endpoint
+
+---
+
+## API Client Skeleton
+
+```typescript
+// JWT client — used for most endpoints
+const api = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL + '/api/v1',
+})
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('access_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+// API-key client — used only for keyword management and toggles
+const adminApi = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL + '/api/v1',
+  headers: { 'x-api-key': import.meta.env.VITE_API_KEY },
+})
+
+// Excel export via JWT client
+export async function downloadMatches(keywords: string[], dateFrom?: string, dateTo?: string) {
+  const params = new URLSearchParams()
+  keywords.forEach(k => params.append('keyword', k))
+  if (dateFrom) params.set('date_from', dateFrom)
+  if (dateTo) params.set('date_to', dateTo)
+  const response = await api.get('/admin/keyword-analysis/matches/export', {
+    params, responseType: 'blob',
+  })
+  const url = URL.createObjectURL(response.data)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'matches.xlsx'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+```
+
+---
+
+## Frontend Guidance
+
+- **On login:** store `access_token` in `localStorage`. Decode the payload to get `role`, `phone`, `group_jid` for immediate UI decisions.
+- **Role branching:** `role === 'superadmin'` shows the Users tab and sees all matches; `role === 'user'` sees their own data only.
+- **Session polling:** poll `GET /whatsapp/status` every 5 seconds on the Session page. Show the pairing form when `pairing_required: true`.
+- **Keyword mutations:** always invalidate the `GET /keywords` query after add, patch, or delete so the list auto-refreshes.
+- **Token expiry:** on `401` from a JWT endpoint, clear `localStorage` and redirect to login.
+- **Excel download:** always use the blob fetch pattern (shown above) — the `Authorization` header cannot be set on a plain `<a href>` click.

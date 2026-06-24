@@ -6,7 +6,8 @@ import openpyxl
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_poll_repository, require_api_key
+from app.api.deps import UserProfile, get_current_user, get_poll_repository, require_api_key, require_superadmin
+from app.core.bridge_pool import BridgePool
 from app.core.config import Settings, get_settings
 from app.models.whatsapp import (
     WhatsAppBackfillActionResponse,
@@ -47,8 +48,8 @@ def _get_propensity_state(request: Request) -> PropensityScoringStateService:
     return state
 
 
-async def _call_bridge_backfill(action: str, settings: Settings) -> WhatsAppBackfillActionResponse:
-    url = f'http://127.0.0.1:{settings.backfill_control_port}/backfill/{action}'
+async def _call_bridge_backfill(action: str, port: int, settings: Settings) -> WhatsAppBackfillActionResponse:
+    url = f'http://127.0.0.1:{port}/backfill/{action}'
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -57,7 +58,7 @@ async def _call_bridge_backfill(action: str, settings: Settings) -> WhatsAppBack
                 timeout=5.0,
             )
     except httpx.ConnectError as exc:
-        logger.error('Backfill control server unreachable action=%s', action)
+        logger.error('Backfill control server unreachable action=%s port=%s', action, port)
         raise HTTPException(status_code=503, detail='Bridge backfill control server is not reachable.') from exc
 
     if response.status_code == 401:
@@ -70,24 +71,40 @@ async def _call_bridge_backfill(action: str, settings: Settings) -> WhatsAppBack
     return WhatsAppBackfillActionResponse(action=action, accepted=True)
 
 
+def _resolve_backfill_port(request: Request, current_user: UserProfile, settings: Settings) -> int:
+    if current_user.role == 'superadmin':
+        return settings.backfill_control_port
+    pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail='Bridge pool is unavailable.')
+    port = pool.get_backfill_port(current_user.user_id)
+    if port is None:
+        raise HTTPException(status_code=404, detail='No WhatsApp session found for this account.')
+    return port
+
+
 # ── History backfill ──────────────────────────────────────────────────────────
 
 @router.post('/backfill/start', response_model=WhatsAppBackfillActionResponse)
 async def start_history_backfill(
-    _: None = Depends(require_api_key),
+    request: Request,
+    current_user: UserProfile = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> WhatsAppBackfillActionResponse:
-    logger.info('Admin: start history backfill')
-    return await _call_bridge_backfill('start', settings)
+    logger.info('Admin: start history backfill user_id=%s', current_user.user_id)
+    port = _resolve_backfill_port(request, current_user, settings)
+    return await _call_bridge_backfill('start', port, settings)
 
 
 @router.post('/backfill/stop', response_model=WhatsAppBackfillActionResponse)
 async def stop_history_backfill(
-    _: None = Depends(require_api_key),
+    request: Request,
+    current_user: UserProfile = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> WhatsAppBackfillActionResponse:
-    logger.info('Admin: stop history backfill')
-    return await _call_bridge_backfill('stop', settings)
+    logger.info('Admin: stop history backfill user_id=%s', current_user.user_id)
+    port = _resolve_backfill_port(request, current_user, settings)
+    return await _call_bridge_backfill('stop', port, settings)
 
 
 # ── Keyword analysis ──────────────────────────────────────────────────────────
@@ -136,16 +153,18 @@ async def delete_keywords(
 
 @router.get('/keyword-analysis/matches/export')
 async def export_matches(
-    _: None = Depends(require_api_key),
+    current_user: UserProfile = Depends(get_current_user),
     repository: SupabasePollRepository = Depends(get_poll_repository),
     keyword: list[str] = Query(),
     date_from: str | None = Query(default=None, description='ISO 8601, e.g. 2025-01-01T00:00:00Z'),
     date_to: str | None = Query(default=None, description='ISO 8601, e.g. 2025-12-31T23:59:59Z'),
 ) -> StreamingResponse:
+    receiver_phone = None if current_user.role == 'superadmin' else current_user.whatsapp_phone
     result = await repository.query_matches(
         keywords=keyword,
         date_from=date_from,
         date_to=date_to,
+        receiver_phone=receiver_phone,
         limit=10000,
         offset=0,
     )
@@ -237,3 +256,29 @@ async def stop_propensity_scoring(
     _get_propensity_state(request).disable()
     logger.info('Admin: propensity scoring disabled')
     return WhatsAppPropensityActionResponse(action='stop', enabled=False)
+
+
+# ── User management ───────────────────────────────────────────────────────────
+
+@router.get('/users')
+async def list_users(
+    current_user: UserProfile = Depends(require_superadmin),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+) -> dict:
+    users = await repository.fetch_users()
+    return {'users': users}
+
+
+@router.patch('/users/{user_id}/deactivate')
+async def deactivate_user(
+    user_id: str,
+    request: Request,
+    current_user: UserProfile = Depends(require_superadmin),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+) -> dict:
+    await repository.deactivate_user_db(user_id)
+    pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
+    if pool:
+        pool.stop_bridge(user_id)
+    logger.info('Deactivated user user_id=%s by superadmin=%s', user_id, current_user.user_id)
+    return {'user_id': user_id, 'deactivated': True}

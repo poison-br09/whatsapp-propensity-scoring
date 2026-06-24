@@ -156,9 +156,34 @@ class SupabasePollRepository:
     async def add_keywords(self, keywords: list[str]) -> list[dict]:
         return await asyncio.to_thread(self._add_keywords, keywords)
 
+    async def fetch_users(self) -> list[dict]:
+        return await asyncio.to_thread(self._fetch_users)
+
+    async def deactivate_user_db(self, user_id: str) -> None:
+        await asyncio.to_thread(self._deactivate_user, user_id)
+
     async def set_keywords_active(self, keywords: list[str], enabled: bool) -> list[dict[str, str]]:
         rows = await asyncio.to_thread(self._update_keywords_active, keywords, enabled)
         return [{'keyword': str(row['keyword']), 'enabled': str(row['is_active'])} for row in rows]
+
+    def _fetch_users(self) -> list[dict]:
+        result = (
+            self._get_client()
+            .table('users')
+            .select('id,username,whatsapp_phone,target_group_jid,role,is_active,created_at')
+            .order('created_at')
+            .execute()
+        )
+        return getattr(result, 'data', result) or []
+
+    def _deactivate_user(self, user_id: str) -> None:
+        (
+            self._get_client()
+            .table('users')
+            .update({'is_active': False})
+            .eq('id', user_id)
+            .execute()
+        )
 
     def _fetch_all_keywords(self) -> list[Any]:
         result = (
