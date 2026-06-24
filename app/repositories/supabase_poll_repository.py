@@ -169,7 +169,7 @@ class SupabasePollRepository:
     def _fetch_users(self) -> list[dict]:
         result = (
             self._get_client()
-            .table('users')
+            .table(self._settings.supabase_users_table)
             .select('id,username,whatsapp_phone,target_group_jid,role,is_active,created_at')
             .order('created_at')
             .execute()
@@ -179,7 +179,7 @@ class SupabasePollRepository:
     def _deactivate_user(self, user_id: str) -> None:
         (
             self._get_client()
-            .table('users')
+            .table(self._settings.supabase_users_table)
             .update({'is_active': False})
             .eq('id', user_id)
             .execute()
