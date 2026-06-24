@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     baileys_protocol_log_level: str = 'error'
     baileys_log_dir: str = 'logs/server'
     backfill_control_port: int = 8001
+    jwt_secret: str | None = None
+    jwt_expire_hours: int = 24
+    supabase_users_table: str = 'users'
 
     model_config = SettingsConfigDict(
         env_file='.env',

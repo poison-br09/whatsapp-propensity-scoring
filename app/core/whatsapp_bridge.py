@@ -14,8 +14,24 @@ logger = Logger(__name__)
 
 
 class BaileysBridgeProcessManager:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        phone_number: str | None = None,
+        group_jid: str | None = None,
+        group_name: str | None = None,
+        auth_path: Path | None = None,
+        log_path: Path | None = None,
+        backfill_port: int | None = None,
+    ) -> None:
         self._settings = settings
+        self._phone_number = phone_number
+        self._group_jid = group_jid
+        self._group_name = group_name
+        self._auth_path = auth_path
+        self._log_path = log_path
+        self._backfill_port = backfill_port
         self._process: subprocess.Popen[str] | None = None
         self._stdout_handle = None
         self._stderr_handle = None
@@ -30,7 +46,7 @@ class BaileysBridgeProcessManager:
             return
 
         self._start_process(
-            phone_number=self._settings.whatsapp_phone_number,
+            phone_number=self._phone_number or self._settings.whatsapp_phone_number,
             use_pairing_code=self._settings.whatsapp_use_pairing_code,
             reset_session=False,
             pairing_code_output_path=None,
@@ -41,7 +57,8 @@ class BaileysBridgeProcessManager:
         if not normalized_phone_number:
             raise ValueError('Phone number must include digits.')
 
-        pairing_code_path = self._settings.baileys_log_path / 'pairing-code.json'
+        log_dir = self._log_path or self._settings.baileys_log_path
+        pairing_code_path = log_dir / 'pairing-code.json'
         self.stop()
         self._start_process(
             phone_number=normalized_phone_number,
@@ -118,12 +135,12 @@ class BaileysBridgeProcessManager:
 
         self._terminate_stale_bridge_processes(entrypoint)
 
-        auth_path = self._settings.baileys_auth_path or (bridge_dir / 'baileys_auth_info')
+        auth_path = self._auth_path or self._settings.baileys_auth_path or (bridge_dir / 'baileys_auth_info')
         if reset_session and auth_path.exists():
             for item in auth_path.iterdir():
                 shutil.rmtree(item) if item.is_dir() else item.unlink()
 
-        log_dir = self._settings.baileys_log_path
+        log_dir = self._log_path or self._settings.baileys_log_path
         log_dir.mkdir(parents=True, exist_ok=True)
         server_log_path = log_dir / 'server.log'
         error_log_path = log_dir / 'error.log'
@@ -134,8 +151,8 @@ class BaileysBridgeProcessManager:
         env = os.environ.copy()
         env.update(
             {
-                'TARGET_GROUP_JID': self._settings.whatsapp_group_jid or '',
-                'TARGET_GROUP_NAME': self._settings.whatsapp_group_name or '',
+                'TARGET_GROUP_JID': self._group_jid or self._settings.whatsapp_group_jid or '',
+                'TARGET_GROUP_NAME': self._group_name or self._settings.whatsapp_group_name or '',
                 'USE_PAIRING_CODE': 'true' if use_pairing_code else 'false',
                 'PHONE_NUMBER': phone_number or '',
                 'PYTHON_INTERNAL_BASE_URL': self._settings.whatsapp_internal_base_url,
@@ -144,7 +161,7 @@ class BaileysBridgeProcessManager:
                 'LOG_LEVEL': self._settings.baileys_log_level,
                 'PROTOCOL_LOG_LEVEL': self._settings.baileys_protocol_log_level,
                 'PAIRING_CODE_OUTPUT_PATH': str(pairing_code_output_path) if pairing_code_output_path else '',
-                'BACKFILL_CONTROL_PORT': str(self._settings.backfill_control_port),
+                'BACKFILL_CONTROL_PORT': str(self._backfill_port or self._settings.backfill_control_port),
             }
         )
 
