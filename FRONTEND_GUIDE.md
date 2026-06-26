@@ -153,7 +153,8 @@ On any `401` from a protected endpoint, clear `localStorage` and redirect to the
 | `/api/v1/admin/backfill/stop` | POST | `Bearer <token>` |
 | `/api/v1/admin/users` | GET | `Bearer <token>` (superadmin only) |
 | `/api/v1/admin/users/{id}/deactivate` | PATCH | `Bearer <token>` (superadmin only) |
-| `/api/v1/admin/keyword-analysis/keywords` | GET/POST/PATCH/DELETE | `x-api-key: <API_KEY>` |
+| `/api/v1/admin/keyword-analysis/keywords` | GET, POST | `Bearer <token>` (any user) |
+| `/api/v1/admin/keyword-analysis/keywords` | PATCH, DELETE | `Bearer <token>` (superadmin only) |
 | `/api/v1/admin/keyword-analysis/start` | POST | `x-api-key: <API_KEY>` |
 | `/api/v1/admin/keyword-analysis/stop` | POST | `x-api-key: <API_KEY>` |
 | `/api/v1/admin/propensity/start` | POST | `x-api-key: <API_KEY>` |
@@ -169,8 +170,9 @@ On any `401` from a protected endpoint, clear `localStorage` and redirect to the
 | Pair own WhatsApp number | Yes | Yes |
 | Export own keyword matches | Yes | Yes |
 | Trigger backfill for own bridge | Yes | Yes |
-| View keyword list | No (no `x-api-key`) | Yes |
-| Add / edit / delete keywords | No | Yes |
+| View keyword list | Yes | Yes |
+| Add keywords | Yes | Yes |
+| Enable / disable / delete keywords | No | Yes |
 | Export all users' matches (no phone filter) | No | Yes |
 | List all users | No | Yes |
 | Deactivate a user | No | Yes |
@@ -316,13 +318,14 @@ Takes approximately 5–10 seconds to respond.
 
 ---
 
-### 2. Keywords (`x-api-key` only)
+### 2. Keywords
 
 These endpoints use `x-api-key` — show them in the superadmin UI only.
 
 ---
 
 #### GET `/api/v1/admin/keyword-analysis/keywords`
+Auth: `Bearer <token>` — any authenticated user.
 
 **Response `200`**
 ```json
@@ -337,6 +340,7 @@ These endpoints use `x-api-key` — show them in the superadmin UI only.
 ---
 
 #### POST `/api/v1/admin/keyword-analysis/keywords`
+Auth: `Bearer <token>` — any authenticated user.
 
 Add one or more keywords. Normalised to lowercase. Silently skips duplicates.
 
@@ -358,6 +362,7 @@ Add one or more keywords. Normalised to lowercase. Silently skips duplicates.
 ---
 
 #### PATCH `/api/v1/admin/keyword-analysis/keywords`
+Auth: `Bearer <token>` — superadmin only.
 
 Enable or disable a set of keywords.
 
@@ -381,6 +386,7 @@ Enable or disable a set of keywords.
 ---
 
 #### DELETE `/api/v1/admin/keyword-analysis/keywords`
+Auth: `Bearer <token>` — superadmin only.
 
 **Request body**
 ```json
@@ -638,7 +644,7 @@ api.interceptors.response.use(
   },
 )
 
-// API-key client — used only for keyword management and toggles
+// API-key client — used only for keyword-analysis start/stop and propensity toggles
 export const adminApi = axios.create({
   baseURL: BASE,
   headers: { 'x-api-key': import.meta.env.VITE_API_KEY },

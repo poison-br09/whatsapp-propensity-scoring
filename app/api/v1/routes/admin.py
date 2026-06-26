@@ -131,7 +131,7 @@ async def stop_keyword_analysis(
 
 @router.get('/keyword-analysis/keywords', response_model=WhatsAppKeywordListResponse)
 async def list_keywords(
-    _: None = Depends(require_api_key),
+    _: UserProfile = Depends(get_current_user),
     repository: SupabasePollRepository = Depends(get_poll_repository),
 ) -> WhatsAppKeywordListResponse:
     rows = await repository.get_all_keywords()
@@ -142,7 +142,7 @@ async def list_keywords(
 @router.delete('/keyword-analysis/keywords', response_model=WhatsAppKeywordDeleteResponse)
 async def delete_keywords(
     payload: WhatsAppKeywordDeleteRequest,
-    _: None = Depends(require_api_key),
+    _: UserProfile = Depends(require_superadmin),
     repository: SupabasePollRepository = Depends(get_poll_repository),
 ) -> WhatsAppKeywordDeleteResponse:
     logger.info('Admin: delete keywords keywords=%s', payload.keywords)
@@ -204,7 +204,7 @@ async def export_matches(
 @router.post('/keyword-analysis/keywords', response_model=WhatsAppKeywordAddResponse)
 async def add_keywords(
     payload: WhatsAppKeywordAddRequest,
-    _: None = Depends(require_api_key),
+    _: UserProfile = Depends(get_current_user),
     repository: SupabasePollRepository = Depends(get_poll_repository),
 ) -> WhatsAppKeywordAddResponse:
     logger.info('Admin: add keywords keywords=%s', payload.keywords)
@@ -223,7 +223,7 @@ async def add_keywords(
 @router.patch('/keyword-analysis/keywords', response_model=WhatsAppKeywordControlResponse)
 async def control_keywords(
     payload: WhatsAppKeywordControlRequest,
-    _: None = Depends(require_api_key),
+    _: UserProfile = Depends(require_superadmin),
     repository: SupabasePollRepository = Depends(get_poll_repository),
 ) -> WhatsAppKeywordControlResponse:
     requested = {kw.lower() for kw in payload.keywords}
