@@ -267,10 +267,15 @@ async def stop_propensity_scoring(
 
 @router.get('/users')
 async def list_users(
+    request: Request,
     current_user: UserProfile = Depends(require_superadmin),
     repository: SupabasePollRepository = Depends(get_poll_repository),
 ) -> dict:
     users = await repository.fetch_users()
+    pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
+    for user in users:
+        state = pool.get_session_state(user['id']) if pool else None
+        user['whatsapp_status'] = state.get_status().status if state else None
     return {'users': users}
 
 
