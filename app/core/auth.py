@@ -1,23 +1,22 @@
 from datetime import datetime, timedelta
 
+import bcrypt
 import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from passlib.context import CryptContext
 
 from app.core.config import Settings, get_settings
 from app.models.user import UserProfile
 
-_pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
 _bearer_scheme = HTTPBearer()
 
 
 def hash_password(plain: str) -> str:
-    return _pwd_context.hash(plain)
+    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return _pwd_context.verify(plain, hashed)
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
 def create_access_token(
