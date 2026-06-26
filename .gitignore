@@ -33,5 +33,9 @@ prd*
 node_modules/
 baileys_auth_info/
 baileys_auth_*/
+**/baileys_auth_info/
+**/baileys_auth_*/
 logs/
+**/logs/
 whatsapp_bridge/poll_store.json
+whatsapp_bridge/node_modules/
