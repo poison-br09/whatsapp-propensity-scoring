@@ -241,23 +241,37 @@ Returns the calling user's own WhatsApp session state. Each user sees only their
 
 | Field | Type | Notes |
 |---|---|---|
-| `status` | `string` | `"connected"` \| `"disconnected"` \| `"connecting"` \| `"logged_out"` |
+| `status` | `string` | See status values below |
 | `phone_number` | `string \| null` | The user's logged-in WhatsApp number |
 | `target_group_jid` | `string \| null` | Group being monitored |
 | `last_event_at` | `string \| null` | ISO 8601 timestamp of last bridge event |
 | `last_disconnect_code` | `number \| null` | Baileys disconnect reason code |
 | `pairing_required` | `boolean` | `true` when the bridge is running but not linked to a phone |
 
+**All possible `status` values (from the bridge):**
+| Value | Meaning | UI to show |
+|---|---|---|
+| `"starting"` | Bridge process just started | "Starting…" spinner |
+| `"pairing_code_generated"` | Pairing code issued, waiting for phone scan | Display the pairing code + instructions |
+| `"connected"` | Phone is linked and online | "Connected ✓" |
+| `"reconnecting"` | Connection dropped, bridge retrying automatically | "Reconnecting…" spinner — no action needed |
+| `"logged_out"` | Session terminated | Show "Get Pairing Code" button again |
+
+**Drive UI from `pairing_required`, not just `status`:**
+- `pairing_required === true` → show pairing code input/display (covers both `starting` and `pairing_code_generated`)
+- `pairing_required === false` + `status === "connected"` → show connected state
+- `pairing_required === false` + `status === "reconnecting"` → show reconnecting state
+- `status === "logged_out"` → show "Get Pairing Code" button again
+
 **Errors**
 | Code | Meaning |
 |---|---|
 | `401` | Missing or invalid token |
-| `404` | No WhatsApp bridge found for this account (user not registered yet) |
+| `404` | No WhatsApp bridge found for this account |
 | `503` | Bridge pool service unavailable |
 
-**Frontend note:** Poll this endpoint every 5 seconds on the Session page. Show the pairing
-UI whenever `pairing_required === true`. Hide it and show "Connected" when
-`status === "connected"`.
+**Frontend note:** Poll every 5 seconds. The status transitions automatically:
+`starting` → `pairing_code_generated` → `connected` (after phone scan).
 
 ---
 
