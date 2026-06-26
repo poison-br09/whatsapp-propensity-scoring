@@ -572,13 +572,22 @@ Returns all registered users.
 
 #### PATCH `/api/v1/admin/users/{user_id}/deactivate`
 
-Deactivates the user's account in the database and immediately stops their WhatsApp bridge
-process. The user's JWT will continue to be structurally valid, but login will fail with `401`
-because `is_active = false`.
+Deactivates the account and stops the WhatsApp bridge. Login returns `401` while deactivated.
 
 **Response `200`**
 ```json
 { "user_id": "uuid", "deactivated": true }
+```
+
+---
+
+#### PATCH `/api/v1/admin/users/{user_id}/activate`
+
+Re-activates a deactivated account. Restarts the WhatsApp bridge automatically if the user has a phone linked.
+
+**Response `200`**
+```json
+{ "user_id": "uuid", "activated": true }
 ```
 
 **Errors**
@@ -586,6 +595,25 @@ because `is_active = false`.
 |---|---|
 | `401` | Missing or invalid token |
 | `403` | Not a superadmin |
+| `404` | User not found |
+
+---
+
+#### DELETE `/api/v1/admin/users/{user_id}`
+
+Permanently deletes the user account and stops their WhatsApp bridge. Cannot be undone.
+
+**Response `200`**
+```json
+{ "user_id": "uuid", "deleted": true }
+```
+
+**Errors**
+| Code | Meaning |
+|---|---|
+| `401` | Missing or invalid token |
+| `403` | Not a superadmin |
+| `404` | User not found |
 
 ---
 

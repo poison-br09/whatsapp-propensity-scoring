@@ -162,6 +162,12 @@ class SupabasePollRepository:
     async def deactivate_user_db(self, user_id: str) -> None:
         await asyncio.to_thread(self._deactivate_user, user_id)
 
+    async def activate_user_db(self, user_id: str) -> dict | None:
+        return await asyncio.to_thread(self._activate_user, user_id)
+
+    async def delete_user_db(self, user_id: str) -> dict | None:
+        return await asyncio.to_thread(self._delete_user, user_id)
+
     async def set_keywords_active(self, keywords: list[str], enabled: bool) -> list[dict[str, str]]:
         rows = await asyncio.to_thread(self._update_keywords_active, keywords, enabled)
         return [{'keyword': str(row['keyword']), 'enabled': str(row['is_active'])} for row in rows]
@@ -184,6 +190,28 @@ class SupabasePollRepository:
             .eq('id', user_id)
             .execute()
         )
+
+    def _activate_user(self, user_id: str) -> dict | None:
+        result = (
+            self._get_client()
+            .table(self._settings.supabase_users_table)
+            .update({'is_active': True})
+            .eq('id', user_id)
+            .execute()
+        )
+        rows = getattr(result, 'data', result) or []
+        return rows[0] if rows else None
+
+    def _delete_user(self, user_id: str) -> dict | None:
+        result = (
+            self._get_client()
+            .table(self._settings.supabase_users_table)
+            .delete()
+            .eq('id', user_id)
+            .execute()
+        )
+        rows = getattr(result, 'data', result) or []
+        return rows[0] if rows else None
 
     def _fetch_all_keywords(self) -> list[Any]:
         result = (

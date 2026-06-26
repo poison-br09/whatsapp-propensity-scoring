@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 
@@ -292,3 +293,38 @@ async def deactivate_user(
         pool.stop_bridge(user_id)
     logger.info('Deactivated user user_id=%s by superadmin=%s', user_id, current_user.user_id)
     return {'user_id': user_id, 'deactivated': True}
+
+
+@router.patch('/users/{user_id}/activate')
+async def activate_user(
+    user_id: str,
+    request: Request,
+    current_user: UserProfile = Depends(require_superadmin),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    row = await repository.activate_user_db(user_id)
+    if not row:
+        raise HTTPException(status_code=404, detail='User not found.')
+    pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
+    if pool and row.get('whatsapp_phone') and pool.get(user_id) is None:
+        await asyncio.to_thread(pool.start_bridge, user_id, row['whatsapp_phone'], row.get('target_group_jid'))
+    logger.info('Activated user user_id=%s by superadmin=%s', user_id, current_user.user_id)
+    return {'user_id': user_id, 'activated': True}
+
+
+@router.delete('/users/{user_id}')
+async def delete_user(
+    user_id: str,
+    request: Request,
+    current_user: UserProfile = Depends(require_superadmin),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+) -> dict:
+    pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
+    if pool:
+        pool.stop_bridge(user_id)
+    row = await repository.delete_user_db(user_id)
+    if not row:
+        raise HTTPException(status_code=404, detail='User not found.')
+    logger.info('Deleted user user_id=%s by superadmin=%s', user_id, current_user.user_id)
+    return {'user_id': user_id, 'deleted': True}
