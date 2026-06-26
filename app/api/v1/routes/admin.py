@@ -159,16 +159,21 @@ async def export_matches(
     date_from: str | None = Query(default=None, description='ISO 8601, e.g. 2025-01-01T00:00:00Z'),
     date_to: str | None = Query(default=None, description='ISO 8601, e.g. 2025-12-31T23:59:59Z'),
 ) -> StreamingResponse:
-    receiver_phone = None if current_user.role == 'superadmin' else current_user.whatsapp_phone
-    result = await repository.query_matches(
-        keywords=keyword,
-        date_from=date_from,
-        date_to=date_to,
-        receiver_phone=receiver_phone,
-        limit=10000,
-        offset=0,
-    )
-    rows = result['rows']
+    if current_user.role == 'superadmin':
+        receiver_phone = None  # no filter — sees everything
+        result = await repository.query_matches(
+            keywords=keyword, date_from=date_from, date_to=date_to,
+            receiver_phone=receiver_phone, limit=10000, offset=0,
+        )
+        rows = result['rows']
+    elif current_user.whatsapp_phone:
+        result = await repository.query_matches(
+            keywords=keyword, date_from=date_from, date_to=date_to,
+            receiver_phone=current_user.whatsapp_phone, limit=10000, offset=0,
+        )
+        rows = result['rows']
+    else:
+        rows = []  # user has no WhatsApp number linked yet
 
     wb = openpyxl.Workbook()
     ws = wb.active

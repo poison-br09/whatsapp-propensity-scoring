@@ -24,7 +24,7 @@ def create_access_token(
     user_id: str,
     username: str,
     role: str,
-    whatsapp_phone: str,
+    whatsapp_phone: str | None,
     target_group_jid: str | None,
     settings: Settings,
 ) -> str:

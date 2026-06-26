@@ -34,7 +34,8 @@ async def lifespan(app: FastAPI):
         result = client.table(settings.supabase_users_table).select('id,whatsapp_phone,target_group_jid').eq('is_active', True).execute()
         users = getattr(result, 'data', result) or []
         for user in users:
-            bridge_pool.start_bridge(user['id'], user['whatsapp_phone'], user.get('target_group_jid'))
+            if user.get('whatsapp_phone'):
+                bridge_pool.start_bridge(user['id'], user['whatsapp_phone'], user.get('target_group_jid'))
     except Exception as exc:
         logger.warning('Could not load users for bridge pool startup: %s', exc)
 

@@ -25,17 +25,20 @@ async def register(
     _: UserProfile = Depends(require_superadmin),
 ) -> UserLoginResponse:
     settings = get_settings()
-    normalized_phone = re.sub(r'\D', '', payload.whatsapp_phone)
+    normalized_phone = re.sub(r'\D', '', payload.whatsapp_phone) if payload.whatsapp_phone else None
 
     def _insert():
         client = _get_supabase(settings)
-        return client.table(settings.supabase_users_table).insert({
+        row_data: dict = {
             'username': payload.username,
             'password_hash': hash_password(payload.password),
-            'whatsapp_phone': normalized_phone,
-            'target_group_jid': payload.target_group_jid,
             'role': 'user',
-        }).execute()
+        }
+        if normalized_phone:
+            row_data['whatsapp_phone'] = normalized_phone
+        if payload.target_group_jid:
+            row_data['target_group_jid'] = payload.target_group_jid
+        return client.table(settings.supabase_users_table).insert(row_data).execute()
 
     try:
         result = await asyncio.to_thread(_insert)
@@ -50,7 +53,7 @@ async def register(
     role = row['role']
 
     bridge_pool = getattr(request.app.state, 'bridge_pool', None)
-    if bridge_pool is not None:
+    if bridge_pool is not None and normalized_phone:
         await asyncio.to_thread(bridge_pool.start_bridge, user_id, normalized_phone, payload.target_group_jid)
 
     access_token = create_access_token(
@@ -92,12 +95,12 @@ async def login(payload: UserLoginRequest) -> UserLoginResponse:
         user_id=str(row['id']),
         username=row['username'],
         role=row['role'],
-        whatsapp_phone=row['whatsapp_phone'],
+        whatsapp_phone=row.get('whatsapp_phone'),
         target_group_jid=row.get('target_group_jid'),
         settings=settings,
     )
     return UserLoginResponse(
         access_token=access_token,
         role=row['role'],
-        whatsapp_phone=row['whatsapp_phone'],
+        whatsapp_phone=row.get('whatsapp_phone'),
     )

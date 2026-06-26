@@ -29,13 +29,12 @@ frontend tasks, but the frontend must know they exist to understand the system s
 
 1. **Run Supabase migrations 011 and 012** in the Supabase SQL editor.
 2. **Add `JWT_SECRET`** to the server `.env` file (any long random string).
-3. **Seed the first superadmin** directly in the database:
+3. **Seed the first superadmin** directly in the database (no WhatsApp number needed):
    ```sql
-   INSERT INTO users (username, password_hash, whatsapp_phone, role)
+   INSERT INTO users (username, password_hash, role)
    VALUES (
      'admin',
      '<bcrypt-hash-of-password>',
-     '91XXXXXXXXXX',
      'superadmin'
    );
    ```
@@ -75,7 +74,7 @@ Public endpoint — no token required.
 | `access_token` | `string` | JWT — store in `localStorage` |
 | `token_type` | `string` | Always `"bearer"` |
 | `role` | `string` | `"user"` or `"superadmin"` |
-| `whatsapp_phone` | `string` | The user's registered WhatsApp number |
+| `whatsapp_phone` | `string \| null` | The user's registered WhatsApp number, or `null` if none linked |
 
 **Errors**
 | Code | Meaning |
@@ -103,7 +102,7 @@ Registers a new user and immediately starts their WhatsApp bridge process.
 |---|---|---|---|
 | `username` | `string` | Yes | 3–50 chars, must be unique |
 | `password` | `string` | Yes | Min 8 chars |
-| `whatsapp_phone` | `string` | Yes | Min 6 chars, digits only; must be unique |
+| `whatsapp_phone` | `string \| null` | No | Digits only; must be unique if provided. Omit for superadmins or users who haven't linked a number yet |
 | `target_group_jid` | `string \| null` | No | WhatsApp group JID to monitor |
 
 **Response `200`** — same shape as login.
@@ -133,7 +132,7 @@ JWT payload fields:
 | `sub` | `string` | User UUID |
 | `username` | `string` | Display name |
 | `role` | `string` | `"user"` or `"superadmin"` |
-| `phone` | `string` | `whatsapp_phone` |
+| `phone` | `string \| null` | `whatsapp_phone`, or `null` if no number linked |
 | `group_jid` | `string \| null` | Target group JID |
 | `exp` | `number` | Unix timestamp — token expires after 24 hours by default |
 
@@ -674,8 +673,11 @@ export async function downloadMatches(
 
 ### Session Page — all users
 
-- Poll `GET /api/v1/whatsapp/status` every 5 seconds
+- If the user's JWT `phone` field is `null`, show a message like "No WhatsApp number linked to
+  this account. Contact an admin." — skip all polling, no pairing UI.
+- Otherwise poll `GET /api/v1/whatsapp/status` every 5 seconds
 - Show current `status`, `phone_number`, `target_group_jid`, `last_event_at`
+- On `404`: bridge hasn't started yet — show "Session not initialised" (no pairing UI)
 - **Pairing flow:** when `pairing_required === true`, show a "Get Pairing Code" button
   - On click: `POST /api/v1/whatsapp/pairing-code` with the user's phone (from JWT `phone` field)
   - Show a loading state — this takes ~5–10 seconds
