@@ -146,8 +146,8 @@ On any `401` from a protected endpoint, clear `localStorage` and redirect to the
 |---|---|---|
 | `/api/v1/auth/login` | POST | None |
 | `/api/v1/auth/register` | POST | `Bearer <token>` (superadmin only) |
-| `/api/v1/whatsapp/status` | GET | `Bearer <token>` |
 | `/api/v1/whatsapp/pairing-code` | POST | `Bearer <token>` |
+| `/api/v1/whatsapp/status` | GET | `Bearer <token>` |
 | `/api/v1/admin/keyword-analysis/matches/export` | GET | `Bearer <token>` |
 | `/api/v1/admin/backfill/start` | POST | `Bearer <token>` |
 | `/api/v1/admin/backfill/stop` | POST | `Bearer <token>` |
@@ -302,43 +302,7 @@ Takes approximately 5–10 seconds to respond.
 
 ---
 
-### 2. Link / Update WhatsApp Phone
-
-#### PATCH `/api/v1/auth/profile/phone`
-
-Auth: `Bearer <token>` — any authenticated user can call this.
-
-Links a WhatsApp phone number to the calling user's account. Also starts their bridge process
-immediately. Can be called again if the user needs to change their number.
-
-**Request body**
-```json
-{ "whatsapp_phone": "919876543210" }
-```
-
-**Response `200`** — same shape as login. **The returned `access_token` is a fresh token with
-the new phone embedded — the frontend must replace the stored token with this new one.**
-
-```json
-{
-  "access_token": "<new-jwt>",
-  "token_type": "bearer",
-  "role": "user",
-  "whatsapp_phone": "919876543210"
-}
-```
-
-**Errors**
-| Code | Meaning |
-|---|---|
-| `400` | Phone number is empty after stripping non-digits |
-| `401` | Missing or invalid token |
-| `404` | User record not found |
-| `409` | Phone number already linked to a different account |
-
----
-
-### 3. Keywords (`x-api-key` only)
+### 2. Keywords (`x-api-key` only)
 
 These endpoints use `x-api-key` — show them in the superadmin UI only.
 
@@ -423,7 +387,7 @@ Enable or disable a set of keywords.
 
 ---
 
-### 4. Keyword Analysis Toggle (`x-api-key` only)
+### 3. Keyword Analysis Toggle (`x-api-key` only)
 
 #### POST `/api/v1/admin/keyword-analysis/start`
 
@@ -443,7 +407,7 @@ Enables keyword matching globally (affects all bridges).
 
 ---
 
-### 5. Keyword Match Export
+### 4. Keyword Match Export
 
 #### GET `/api/v1/admin/keyword-analysis/matches/export`
 
@@ -507,7 +471,7 @@ export async function downloadMatches(
 
 ---
 
-### 6. History Backfill
+### 5. History Backfill
 
 Scoped to the calling user's bridge. Superadmins target the default bridge port.
 
@@ -537,7 +501,7 @@ Auth: `Bearer <token>`
 
 ---
 
-### 7. Propensity Scoring Toggle (`x-api-key` only)
+### 6. Propensity Scoring Toggle (`x-api-key` only)
 
 #### POST `/api/v1/admin/propensity/start`
 
@@ -555,7 +519,7 @@ Auth: `Bearer <token>`
 
 ---
 
-### 8. User Management (superadmin only)
+### 7. User Management (superadmin only)
 
 #### GET `/api/v1/admin/users`
 
