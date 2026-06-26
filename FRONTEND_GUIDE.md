@@ -198,11 +198,13 @@ New user logs in (or superadmin hands over the token)
   → Receives access_token (role: user)
 
 User visits Session page
-  → GET /api/v1/whatsapp/status  (poll every 5 s)
-  → status = "disconnected", pairing_required = true  (bridge started but not paired)
+  → JWT.phone is null → show "Link your number" form
+  → (or JWT.phone is set) → poll GET /api/v1/whatsapp/status every 5 s
+  → status = "disconnected", pairing_required = true
 
-User clicks "Get Pairing Code"
+User enters phone and clicks "Get Pairing Code"
   → POST /api/v1/whatsapp/pairing-code  { "phone_number": "919876543210" }
+  → If phone was not set: response includes access_token → save it to localStorage
   → Receives pairing_code = "ABCD-EFGH"  (takes ~5–10 s)
 
 User opens WhatsApp on their phone
@@ -261,7 +263,10 @@ UI whenever `pairing_required === true`. Hide it and show "Connected" when
 
 #### POST `/api/v1/whatsapp/pairing-code`
 
-Restarts the calling user's WhatsApp bridge and requests a pairing code.
+Requests a WhatsApp pairing code. **Also works as a phone-link step** — if the user has no
+phone number linked yet, this endpoint saves the number, starts the bridge, and returns a
+fresh JWT in the same response. No separate "link phone" call needed.
+
 Takes approximately 5–10 seconds to respond.
 
 **Request body**
@@ -274,23 +279,25 @@ Takes approximately 5–10 seconds to respond.
 {
   "phone_number": "919876543210",
   "pairing_code": "ABCD-EFGH",
-  "status": "pairing_code_generated"
+  "status": "pairing_code_generated",
+  "access_token": "<new-jwt-or-null>"
 }
 ```
 
 | Field | Type | Notes |
 |---|---|---|
-| `phone_number` | `string` | Digits only, leading `+` stripped |
+| `phone_number` | `string` | Digits only, `+` stripped |
 | `pairing_code` | `string` | 8-character code to enter on the phone |
 | `status` | `string` | Always `"pairing_code_generated"` on success |
+| `access_token` | `string \| null` | New JWT when phone was freshly linked; `null` if phone was already set. **If non-null, replace the stored token immediately.** |
 
 **Errors**
 | Code | Meaning |
 |---|---|
-| `400` | Invalid phone number format |
+| `400` | Invalid phone number (empty after stripping non-digits) |
 | `401` | Missing or invalid token |
-| `404` | No WhatsApp bridge registered for this account |
-| `503` | Bridge pool service unavailable |
+| `409` | Phone number already linked to a different account |
+| `503` | Bridge pool unavailable or bridge failed to start |
 | `504` | Timed out waiting for the pairing code (30 s) |
 
 ---
@@ -711,10 +718,10 @@ export async function downloadMatches(
 
 - If the user's JWT `phone` field is `null`, show a **"Link your WhatsApp number"** form:
   - Input: phone number (digits only, with country code e.g. `919876543210`)
-  - Submit calls `PATCH /api/v1/auth/profile/phone`
-  - On success: the response contains a **new `access_token`** — store it in `localStorage`,
-    replacing the old one (the new token has the phone embedded)
-  - After saving the new token, reload/re-enter the Session page — polling starts automatically
+  - Submit calls `POST /api/v1/whatsapp/pairing-code` directly — it links the phone, starts
+    the bridge, and returns both the pairing code and a fresh JWT in one step
+  - On success: if `access_token` is non-null in the response, **replace the stored token**
+    in `localStorage` with it, then display the pairing code
   - On `409`: show "This phone number is already linked to another account"
 - Otherwise poll `GET /api/v1/whatsapp/status` every 5 seconds
 - Show current `status`, `phone_number`, `target_group_jid`, `last_event_at`

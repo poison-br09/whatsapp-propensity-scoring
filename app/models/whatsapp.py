@@ -45,6 +45,7 @@ class WhatsAppPairingResponse(BaseModel):
     phone_number: str
     pairing_code: str
     status: str = 'pairing_code_generated'
+    access_token: str | None = None  # set only when phone was newly linked
 
 
 class WhatsAppSessionEventWebhook(BaseModel):
