@@ -5,9 +5,9 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from supabase import create_client
 
-from app.core.auth import create_access_token, hash_password, require_superadmin, verify_password
+from app.core.auth import create_access_token, get_current_user, hash_password, require_superadmin, verify_password
 from app.core.config import Settings, get_settings
-from app.models.user import UserLoginRequest, UserLoginResponse, UserProfile, UserRegisterRequest
+from app.models.user import UserLoginRequest, UserLoginResponse, UserPhoneUpdateRequest, UserProfile, UserRegisterRequest
 
 logger = logging.getLogger(__name__)
 
@@ -103,4 +103,61 @@ async def login(payload: UserLoginRequest) -> UserLoginResponse:
         access_token=access_token,
         role=row['role'],
         whatsapp_phone=row.get('whatsapp_phone'),
+    )
+
+
+@router.patch('/profile/phone', response_model=UserLoginResponse)
+async def update_phone(
+    payload: UserPhoneUpdateRequest,
+    request: Request,
+    current_user: UserProfile = Depends(get_current_user),
+) -> UserLoginResponse:
+    settings = get_settings()
+    normalized_phone = re.sub(r'\D', '', payload.whatsapp_phone)
+    if not normalized_phone:
+        raise HTTPException(status_code=400, detail='Invalid phone number.')
+
+    def _update():
+        client = _get_supabase(settings)
+        return (
+            client.table(settings.supabase_users_table)
+            .update({'whatsapp_phone': normalized_phone})
+            .eq('id', current_user.user_id)
+            .execute()
+        )
+
+    try:
+        result = await asyncio.to_thread(_update)
+    except Exception as exc:
+        msg = str(exc).lower()
+        if 'duplicate key' in msg or '409' in msg or 'unique' in msg:
+            raise HTTPException(status_code=409, detail='Phone number already in use by another account.')
+        raise
+
+    row = result.data[0] if result.data else None
+    if not row:
+        raise HTTPException(status_code=404, detail='User not found.')
+
+    bridge_pool = getattr(request.app.state, 'bridge_pool', None)
+    if bridge_pool is not None:
+        if bridge_pool.get(current_user.user_id) is None:
+            await asyncio.to_thread(
+                bridge_pool.start_bridge,
+                current_user.user_id,
+                normalized_phone,
+                current_user.target_group_jid,
+            )
+
+    access_token = create_access_token(
+        user_id=current_user.user_id,
+        username=current_user.username,
+        role=current_user.role,
+        whatsapp_phone=normalized_phone,
+        target_group_jid=current_user.target_group_jid,
+        settings=settings,
+    )
+    return UserLoginResponse(
+        access_token=access_token,
+        role=current_user.role,
+        whatsapp_phone=normalized_phone,
     )

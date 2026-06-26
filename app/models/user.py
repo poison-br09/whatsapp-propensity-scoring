@@ -20,6 +20,10 @@ class UserLoginResponse(BaseModel):
     whatsapp_phone: str | None = None
 
 
+class UserPhoneUpdateRequest(BaseModel):
+    whatsapp_phone: str = Field(min_length=6)
+
+
 class UserProfile(BaseModel):
     user_id: str
     username: str

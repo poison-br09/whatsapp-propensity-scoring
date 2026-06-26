@@ -295,7 +295,43 @@ Takes approximately 5–10 seconds to respond.
 
 ---
 
-### 2. Keywords (`x-api-key` only)
+### 2. Link / Update WhatsApp Phone
+
+#### PATCH `/api/v1/auth/profile/phone`
+
+Auth: `Bearer <token>` — any authenticated user can call this.
+
+Links a WhatsApp phone number to the calling user's account. Also starts their bridge process
+immediately. Can be called again if the user needs to change their number.
+
+**Request body**
+```json
+{ "whatsapp_phone": "919876543210" }
+```
+
+**Response `200`** — same shape as login. **The returned `access_token` is a fresh token with
+the new phone embedded — the frontend must replace the stored token with this new one.**
+
+```json
+{
+  "access_token": "<new-jwt>",
+  "token_type": "bearer",
+  "role": "user",
+  "whatsapp_phone": "919876543210"
+}
+```
+
+**Errors**
+| Code | Meaning |
+|---|---|
+| `400` | Phone number is empty after stripping non-digits |
+| `401` | Missing or invalid token |
+| `404` | User record not found |
+| `409` | Phone number already linked to a different account |
+
+---
+
+### 3. Keywords (`x-api-key` only)
 
 These endpoints use `x-api-key` — show them in the superadmin UI only.
 
@@ -380,7 +416,7 @@ Enable or disable a set of keywords.
 
 ---
 
-### 3. Keyword Analysis Toggle (`x-api-key` only)
+### 4. Keyword Analysis Toggle (`x-api-key` only)
 
 #### POST `/api/v1/admin/keyword-analysis/start`
 
@@ -400,7 +436,7 @@ Enables keyword matching globally (affects all bridges).
 
 ---
 
-### 4. Keyword Match Export
+### 5. Keyword Match Export
 
 #### GET `/api/v1/admin/keyword-analysis/matches/export`
 
@@ -464,7 +500,7 @@ export async function downloadMatches(
 
 ---
 
-### 5. History Backfill
+### 6. History Backfill
 
 Scoped to the calling user's bridge. Superadmins target the default bridge port.
 
@@ -494,7 +530,7 @@ Auth: `Bearer <token>`
 
 ---
 
-### 6. Propensity Scoring Toggle (`x-api-key` only)
+### 7. Propensity Scoring Toggle (`x-api-key` only)
 
 #### POST `/api/v1/admin/propensity/start`
 
@@ -512,7 +548,7 @@ Auth: `Bearer <token>`
 
 ---
 
-### 7. User Management (superadmin only)
+### 8. User Management (superadmin only)
 
 #### GET `/api/v1/admin/users`
 
@@ -673,8 +709,13 @@ export async function downloadMatches(
 
 ### Session Page — all users
 
-- If the user's JWT `phone` field is `null`, show a message like "No WhatsApp number linked to
-  this account. Contact an admin." — skip all polling, no pairing UI.
+- If the user's JWT `phone` field is `null`, show a **"Link your WhatsApp number"** form:
+  - Input: phone number (digits only, with country code e.g. `919876543210`)
+  - Submit calls `PATCH /api/v1/auth/profile/phone`
+  - On success: the response contains a **new `access_token`** — store it in `localStorage`,
+    replacing the old one (the new token has the phone embedded)
+  - After saving the new token, reload/re-enter the Session page — polling starts automatically
+  - On `409`: show "This phone number is already linked to another account"
 - Otherwise poll `GET /api/v1/whatsapp/status` every 5 seconds
 - Show current `status`, `phone_number`, `target_group_jid`, `last_event_at`
 - On `404`: bridge hasn't started yet — show "Session not initialised" (no pairing UI)
