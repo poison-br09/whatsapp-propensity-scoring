@@ -52,7 +52,7 @@ class KeywordAnalysisService:
                 sender_name=payload.sender_name,
                 sender_phone=payload.sender_phone,
                 receiver_phone=payload.receiver_phone,
-                message=payload.message,
+                message=payload.message.lower(),
                 message_id=payload.message_id,
                 message_date=message_date,
             )
