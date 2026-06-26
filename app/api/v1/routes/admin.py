@@ -152,6 +152,35 @@ async def delete_keywords(
     return WhatsAppKeywordDeleteResponse(results=results)
 
 
+@router.get('/keyword-analysis/matches')
+async def list_matches(
+    current_user: UserProfile = Depends(get_current_user),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+    keyword: list[str] = Query(),
+    date_from: str | None = Query(default=None, description='ISO 8601, e.g. 2025-01-01T00:00:00Z'),
+    date_to: str | None = Query(default=None, description='ISO 8601, e.g. 2025-12-31T23:59:59Z'),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=500),
+) -> dict:
+    offset = (page - 1) * page_size
+    if current_user.role == 'superadmin':
+        receiver_phone = None
+    elif current_user.whatsapp_phone:
+        receiver_phone = current_user.whatsapp_phone
+    else:
+        return {'total': 0, 'page': page, 'page_size': page_size, 'results': []}
+
+    result = await repository.query_matches(
+        keywords=keyword,
+        date_from=date_from,
+        date_to=date_to,
+        receiver_phone=receiver_phone,
+        limit=page_size,
+        offset=offset,
+    )
+    return {'total': result['total'], 'page': page, 'page_size': page_size, 'results': result['rows']}
+
+
 @router.get('/keyword-analysis/matches/export')
 async def export_matches(
     current_user: UserProfile = Depends(get_current_user),
