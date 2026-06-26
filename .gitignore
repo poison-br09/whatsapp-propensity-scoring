@@ -27,6 +27,7 @@ htmlcov/
 .coverage.* 
 *tests/
 .codex
+.claude/
 .env
 prd*
 node_modules/
