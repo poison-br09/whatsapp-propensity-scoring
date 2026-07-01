@@ -619,6 +619,7 @@ const syncPollCreationMessage = async (
         poll_title: getPollTitle(message.message),
         poll_options: getPollOptions(message.message).map(option => option.optionName || ''),
         poll_created_at_ms: getMessageTimestampMs(message),
+        receiver_phone: normalizeVoterPhone(ownPnJid) ?? null,
     })
 
     syncedPolls.add(message.key.id)
@@ -646,6 +647,7 @@ const forwardPollVoteUpdate = async ({
     source: 'messages.update' | 'messages.upsert'
     voterPhoneHint?: string | null
 }) => {
+    const receiverPhone = normalizeVoterPhone(ownPnJid) ?? null
     const selectedOptionNames = resolveSelectedOptionNames(pollCreationMessage.message, selectedOptions)
     const dedupeKey = buildVoteDedupeKey(
         pollMessageId,
@@ -666,6 +668,7 @@ const forwardPollVoteUpdate = async ({
         voter_phone: voterPhone,
         selected_options: selectedOptionNames,
         vote_timestamp_ms: timestampMs,
+        receiver_phone: receiverPhone,
     })
 
     logger.info(

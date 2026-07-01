@@ -59,6 +59,7 @@ class WhatsAppPollIngestionService:
             poll_title=payload.poll_title,
             poll_options=payload.poll_options,
             poll_created_at=_timestamp_from_ms(payload.poll_created_at_ms),
+            receiver_phone=payload.receiver_phone,
         )
         await self._repository.upsert_whatsapp_poll(record)
         logger.info(
@@ -76,6 +77,7 @@ class WhatsAppPollIngestionService:
             poll_title=payload.poll_title,
             poll_options=payload.poll_options,
             poll_created_at=vote_timestamp,
+            receiver_phone=payload.receiver_phone,
         )
         await self._repository.upsert_whatsapp_poll(poll_record)
 
@@ -90,6 +92,7 @@ class WhatsAppPollIngestionService:
             selected_options=payload.selected_options,
             normalized_vote=normalized_vote,
             vote_timestamp=vote_timestamp,
+            receiver_phone=payload.receiver_phone,
         )
 
         inserted = await self._repository.create_whatsapp_poll_vote_event_if_new(event)
@@ -110,6 +113,7 @@ class WhatsAppPollIngestionService:
             selected_options=payload.selected_options,
             normalized_vote=normalized_vote,
             last_vote_timestamp=vote_timestamp,
+            receiver_phone=payload.receiver_phone,
         )
         await self._repository.upsert_whatsapp_poll_vote_snapshot(snapshot)
 

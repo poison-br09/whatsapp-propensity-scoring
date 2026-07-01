@@ -285,7 +285,7 @@ class SupabasePollRepository:
     def _query_polls(self, group_jid: str | None, limit: int, offset: int) -> dict:
         client = self._get_client()
         q = client.table(self._settings.supabase_whatsapp_poll_table).select(
-            'poll_message_id,poll_title,poll_options,group_jid,poll_created_at',
+            'poll_message_id,poll_title,poll_options,group_jid,poll_created_at,receiver_phone',
             count='exact',
         )
         if group_jid:
@@ -299,7 +299,7 @@ class SupabasePollRepository:
         result = (
             self._get_client()
             .table(self._settings.supabase_whatsapp_vote_snapshot_table)
-            .select('voter_jid,voter_phone,selected_options,normalized_vote,last_vote_timestamp')
+            .select('voter_jid,voter_phone,selected_options,normalized_vote,last_vote_timestamp,receiver_phone')
             .eq('poll_message_id', poll_message_id)
             .order('last_vote_timestamp', desc=True)
             .execute()

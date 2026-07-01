@@ -10,6 +10,7 @@ class WhatsAppPollCreatedWebhook(BaseModel):
     poll_title: str
     poll_options: list[str] = Field(default_factory=list)
     poll_created_at_ms: int
+    receiver_phone: str | None = None
 
 
 class WhatsAppPollVoteWebhook(BaseModel):
@@ -22,6 +23,7 @@ class WhatsAppPollVoteWebhook(BaseModel):
     voter_phone: str | None = None
     selected_options: list[str] = Field(default_factory=list)
     vote_timestamp_ms: int
+    receiver_phone: str | None = None
 
 
 class WhatsAppPollCreatedWebhookResponse(BaseModel):
@@ -174,6 +176,7 @@ class WhatsAppPollRecord:
     poll_title: str
     poll_options: list[str]
     poll_created_at: datetime
+    receiver_phone: str | None = None
 
     def to_supabase_payload(self) -> dict[str, object]:
         return {
@@ -182,6 +185,7 @@ class WhatsAppPollRecord:
             'poll_title': self.poll_title,
             'poll_options': self.poll_options,
             'poll_created_at': self.poll_created_at.isoformat(),
+            'receiver_phone': self.receiver_phone,
         }
 
 
@@ -196,6 +200,7 @@ class WhatsAppPollVoteEventRecord:
     selected_options: list[str]
     normalized_vote: int | None
     vote_timestamp: datetime
+    receiver_phone: str | None = None
 
     def to_supabase_payload(self) -> dict[str, object]:
         return {
@@ -208,6 +213,7 @@ class WhatsAppPollVoteEventRecord:
             'selected_options': self.selected_options,
             'normalized_vote': self.normalized_vote,
             'vote_timestamp': self.vote_timestamp.isoformat(),
+            'receiver_phone': self.receiver_phone,
         }
 
 
@@ -249,6 +255,7 @@ class WhatsAppPollVoteSnapshotRecord:
     selected_options: list[str]
     normalized_vote: int | None
     last_vote_timestamp: datetime
+    receiver_phone: str | None = None
 
     def to_supabase_payload(self) -> dict[str, object]:
         return {
@@ -260,4 +267,5 @@ class WhatsAppPollVoteSnapshotRecord:
             'selected_options': self.selected_options,
             'normalized_vote': self.normalized_vote,
             'last_vote_timestamp': self.last_vote_timestamp.isoformat(),
+            'receiver_phone': self.receiver_phone,
         }
