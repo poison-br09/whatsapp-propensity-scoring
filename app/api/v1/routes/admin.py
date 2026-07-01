@@ -300,11 +300,12 @@ async def list_polls(
     _: UserProfile = Depends(require_superadmin),
     repository: SupabasePollRepository = Depends(get_poll_repository),
     group_jid: str | None = Query(default=None, description='Filter by WhatsApp group JID'),
+    group_name: str | None = Query(default=None, description='Filter by WhatsApp group name'),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
 ) -> dict:
     offset = (page - 1) * page_size
-    result = await repository.query_polls(group_jid=group_jid, limit=page_size, offset=offset)
+    result = await repository.query_polls(group_jid=group_jid, group_name=group_name, limit=page_size, offset=offset)
     return {'total': result['total'], 'page': page, 'page_size': page_size, 'polls': result['rows']}
 
 

@@ -129,10 +129,11 @@ class SupabasePollRepository:
         self,
         *,
         group_jid: str | None = None,
+        group_name: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
-        return await asyncio.to_thread(self._query_polls, group_jid, limit, offset)
+        return await asyncio.to_thread(self._query_polls, group_jid, group_name, limit, offset)
 
     async def query_poll_votes(self, poll_message_id: str) -> list[dict]:
         return await asyncio.to_thread(self._query_poll_votes, poll_message_id)
@@ -282,7 +283,7 @@ class SupabasePollRepository:
         total = getattr(result, 'count', None) or 0
         return {'rows': rows, 'total': total}
 
-    def _query_polls(self, group_jid: str | None, limit: int, offset: int) -> dict:
+    def _query_polls(self, group_jid: str | None, group_name: str | None, limit: int, offset: int) -> dict:
         client = self._get_client()
         q = client.table(self._settings.supabase_whatsapp_poll_table).select(
             'poll_message_id,poll_title,poll_options,group_jid,group_name,poll_created_at,receiver_phone',
@@ -290,6 +291,8 @@ class SupabasePollRepository:
         )
         if group_jid:
             q = q.eq('group_jid', group_jid)
+        if group_name:
+            q = q.eq('group_name', group_name)
         result = q.order('poll_created_at', desc=True).range(offset, offset + limit - 1).execute()
         rows = getattr(result, 'data', result) or []
         total = getattr(result, 'count', None) or 0
