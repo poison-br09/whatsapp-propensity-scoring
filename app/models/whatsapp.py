@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 class WhatsAppPollCreatedWebhook(BaseModel):
     group_jid: str
+    group_name: str | None = None
     poll_message_id: str
     poll_title: str
     poll_options: list[str] = Field(default_factory=list)
@@ -16,6 +17,7 @@ class WhatsAppPollCreatedWebhook(BaseModel):
 class WhatsAppPollVoteWebhook(BaseModel):
     dedupe_key: str
     group_jid: str
+    group_name: str | None = None
     poll_message_id: str
     poll_title: str
     poll_options: list[str] = Field(default_factory=list)
@@ -177,10 +179,12 @@ class WhatsAppPollRecord:
     poll_options: list[str]
     poll_created_at: datetime
     receiver_phone: str | None = None
+    group_name: str | None = None
 
     def to_supabase_payload(self) -> dict[str, object]:
         return {
             'group_jid': self.group_jid,
+            'group_name': self.group_name,
             'poll_message_id': self.poll_message_id,
             'poll_title': self.poll_title,
             'poll_options': self.poll_options,

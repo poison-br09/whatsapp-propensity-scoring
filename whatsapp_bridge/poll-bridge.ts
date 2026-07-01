@@ -67,6 +67,7 @@ if (!pythonInternalToken) {
 const pollStore = new Map<string, WAMessage>()
 const syncedPolls = new Set<string>()
 const oldestGroupMessages = new Map<string, WAMessage>()
+const groupNameMap = new Map<string, string>()
 const pendingHistoryBackfills = new Map<string, Promise<void>>()
 
 let liveVoteProcessingEnabled = false
@@ -559,6 +560,16 @@ const logKnownGroups = (groups: Record<string, GroupMetadata>) => {
     logger.info({ groups: entries }, 'available WhatsApp groups for bridge selection')
 }
 
+const cacheGroupNames = (groups: Record<string, GroupMetadata>) => {
+    for (const [jid, metadata] of Object.entries(groups)) {
+        if (metadata.subject) {
+            groupNameMap.set(jid, metadata.subject)
+        }
+    }
+}
+
+const getGroupName = (jid: string): string | null => groupNameMap.get(jid) ?? null
+
 const resolveTargetGroupJid = async (sock: ReturnType<typeof makeWASocket>) => {
     if (targetGroupJid) {
         return targetGroupJid
@@ -566,11 +577,15 @@ const resolveTargetGroupJid = async (sock: ReturnType<typeof makeWASocket>) => {
 
     if (!targetGroupNameEnv) {
         logger.info('no target group configured, processing polls from all WhatsApp groups')
+        const groups = await sock.groupFetchAllParticipating()
+        logKnownGroups(groups)
+        cacheGroupNames(groups)
         return ''
     }
 
     const groups = await sock.groupFetchAllParticipating()
     logKnownGroups(groups)
+    cacheGroupNames(groups)
     const match = Object.entries(groups).find(([, metadata]) => metadata.subject?.trim() === targetGroupNameEnv)
     if (!match) {
         throw new Error(`Could not find WhatsApp group with subject: ${targetGroupNameEnv}`)
@@ -615,6 +630,7 @@ const syncPollCreationMessage = async (
 
     await postInternal('/internal/whatsapp/poll-created', {
         group_jid: groupJid,
+        group_name: getGroupName(groupJid),
         poll_message_id: message.key.id,
         poll_title: getPollTitle(message.message),
         poll_options: getPollOptions(message.message).map(option => option.optionName || ''),
@@ -661,6 +677,7 @@ const forwardPollVoteUpdate = async ({
     await postInternal('/internal/whatsapp/poll-vote', {
         dedupe_key: dedupeKey,
         group_jid: groupJid,
+        group_name: groupJid ? getGroupName(groupJid) : null,
         poll_message_id: pollMessageId,
         poll_title: getPollTitle(pollCreationMessage.message),
         poll_options: getPollOptions(pollCreationMessage.message).map(option => option.optionName || ''),

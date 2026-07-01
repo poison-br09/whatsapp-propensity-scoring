@@ -55,6 +55,7 @@ class WhatsAppPollIngestionService:
     ) -> WhatsAppPollCreatedWebhookResponse:
         record = WhatsAppPollRecord(
             group_jid=payload.group_jid,
+            group_name=payload.group_name,
             poll_message_id=payload.poll_message_id,
             poll_title=payload.poll_title,
             poll_options=payload.poll_options,
@@ -73,6 +74,7 @@ class WhatsAppPollIngestionService:
         vote_timestamp = _timestamp_from_ms(payload.vote_timestamp_ms)
         poll_record = WhatsAppPollRecord(
             group_jid=payload.group_jid,
+            group_name=payload.group_name,
             poll_message_id=payload.poll_message_id,
             poll_title=payload.poll_title,
             poll_options=payload.poll_options,
