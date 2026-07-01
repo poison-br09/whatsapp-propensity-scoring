@@ -148,11 +148,16 @@ On any `401` from a protected endpoint, clear `localStorage` and redirect to the
 | `/api/v1/auth/register` | POST | `Bearer <token>` (superadmin only) |
 | `/api/v1/whatsapp/pairing-code` | POST | `Bearer <token>` |
 | `/api/v1/whatsapp/status` | GET | `Bearer <token>` |
+| `/api/v1/admin/keyword-analysis/matches` | GET | `Bearer <token>` |
 | `/api/v1/admin/keyword-analysis/matches/export` | GET | `Bearer <token>` |
 | `/api/v1/admin/backfill/start` | POST | `Bearer <token>` |
 | `/api/v1/admin/backfill/stop` | POST | `Bearer <token>` |
+| `/api/v1/admin/polls` | GET | `Bearer <token>` (superadmin only) |
+| `/api/v1/admin/polls/{id}/votes` | GET | `Bearer <token>` (superadmin only) |
 | `/api/v1/admin/users` | GET | `Bearer <token>` (superadmin only) |
 | `/api/v1/admin/users/{id}/deactivate` | PATCH | `Bearer <token>` (superadmin only) |
+| `/api/v1/admin/users/{id}/activate` | PATCH | `Bearer <token>` (superadmin only) |
+| `/api/v1/admin/users/{id}` | DELETE | `Bearer <token>` (superadmin only) |
 | `/api/v1/admin/keyword-analysis/keywords` | GET, POST | `Bearer <token>` (any user) |
 | `/api/v1/admin/keyword-analysis/keywords` | PATCH, DELETE | `Bearer <token>` (superadmin only) |
 | `/api/v1/admin/keyword-analysis/start` | POST | `x-api-key: <API_KEY>` |
@@ -176,7 +181,11 @@ On any `401` from a protected endpoint, clear `localStorage` and redirect to the
 | Export all users' matches (no phone filter) | No | Yes |
 | List all users | No | Yes |
 | Deactivate a user | No | Yes |
+| Activate a deactivated user | No | Yes |
+| Delete a user | No | Yes |
 | Register a new user | No | Yes |
+| View poll list | No | Yes |
+| View poll vote breakdown | No | Yes |
 
 ---
 
@@ -539,7 +548,145 @@ Auth: `Bearer <token>`
 
 ---
 
-### 7. User Management (superadmin only)
+### 7. Poll Tracking (superadmin only)
+
+Poll data is collected automatically from every WhatsApp group each connected user's bridge is monitoring. No user action is needed — polls and votes flow in as they happen.
+
+> **Scope note:** polls are not user-scoped. All bridges write to a shared pool. If two users are in the same group, the same poll appears once (upserted by `poll_message_id`).
+
+---
+
+#### GET `/api/v1/admin/polls`
+
+Returns a paginated list of polls observed across all monitored groups.
+
+**Query parameters**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `group_jid` | `string` | No | Filter to a specific WhatsApp group |
+| `page` | `int` | No | Default `1` |
+| `page_size` | `int` | No | Default `50`, max `200` |
+
+**Response `200`**
+```json
+{
+  "total": 120,
+  "page": 1,
+  "page_size": 50,
+  "polls": [
+    {
+      "poll_message_id": "ABCD1234...",
+      "poll_title": "Which flat do you prefer?",
+      "poll_options": ["2BHK", "3BHK", "Studio"],
+      "group_jid": "120363XXXXXX@g.us",
+      "poll_created_at": "2025-06-01T10:00:00Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `poll_message_id` | `string` | Unique ID — use as key and for fetching votes |
+| `poll_title` | `string` | The poll question text |
+| `poll_options` | `string[]` | All available options |
+| `group_jid` | `string` | WhatsApp group the poll was created in |
+| `poll_created_at` | `string` | ISO 8601 UTC timestamp |
+
+**Errors**
+| Code | Meaning |
+|---|---|
+| `401` | Missing or invalid token |
+| `403` | Not a superadmin |
+
+---
+
+#### GET `/api/v1/admin/polls/{poll_message_id}/votes`
+
+Returns the latest vote snapshot for every voter in a specific poll. One row per voter — if a voter changed their selection, only the most recent choice is shown.
+
+**Response `200`**
+```json
+{
+  "poll_message_id": "ABCD1234...",
+  "total_voters": 47,
+  "votes": [
+    {
+      "voter_jid": "919876543210@s.whatsapp.net",
+      "voter_phone": "919876543210",
+      "selected_options": ["2BHK"],
+      "normalized_vote": 1,
+      "last_vote_timestamp": "2025-06-01T10:05:00Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `voter_jid` | `string` | WhatsApp JID of the voter |
+| `voter_phone` | `string \| null` | Phone number extracted from JID, or `null` if not available |
+| `selected_options` | `string[]` | The option(s) the voter last selected |
+| `normalized_vote` | `number \| null` | Internal scoring value — `null` if not applicable |
+| `last_vote_timestamp` | `string` | ISO 8601 UTC — time of most recent vote |
+
+**Errors**
+| Code | Meaning |
+|---|---|
+| `401` | Missing or invalid token |
+| `403` | Not a superadmin |
+
+---
+
+### 8. Keyword Matches (paginated JSON)
+
+#### GET `/api/v1/admin/keyword-analysis/matches`
+
+Auth: `Bearer <token>` — any authenticated user.
+
+Role-scoped identical to the Excel export:
+- `user` — only rows where `receiver_phone` matches their registered number
+- `superadmin` — all rows
+
+**Query parameters**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `keyword` | `string` | Yes (repeat for multiple) | e.g. `?keyword=flat&keyword=rent` |
+| `date_from` | `string` | No | ISO 8601 |
+| `date_to` | `string` | No | ISO 8601 |
+| `page` | `int` | No | Default `1` |
+| `page_size` | `int` | No | Default `50`, max `500` |
+
+**Response `200`**
+```json
+{
+  "total": 342,
+  "page": 1,
+  "page_size": 50,
+  "results": [
+    {
+      "keyword": "flat",
+      "sender_name": "John",
+      "sender_phone": "919876543210",
+      "receiver_phone": "919999999999",
+      "message": "2bhk flat available in...",
+      "message_date": "2025-06-01T10:00:00Z"
+    }
+  ]
+}
+```
+
+**Errors**
+| Code | Meaning |
+|---|---|
+| `401` | Missing or invalid token |
+| `422` | `keyword` param missing |
+
+---
+
+### 9. User Management (superadmin only)
 
 #### GET `/api/v1/admin/users`
 
@@ -787,13 +934,26 @@ export async function downloadMatches(
 
 ---
 
+### Polls Page — superadmin only
+
+- List from `GET /api/v1/admin/polls` with optional `group_jid` filter
+- Show: poll title, group JID, created date, option count
+- Paginate with `page` / `page_size`
+- Clicking a poll opens a detail view:
+  - Call `GET /api/v1/admin/polls/{poll_message_id}/votes`
+  - Show a breakdown table: voter phone, selected option(s), timestamp
+  - Show `total_voters` as a summary stat
+
+---
+
 ### Users Page — superadmin only
 
 - List from `GET /api/v1/admin/users`
-- Show: username, phone, role, status badge (active / deactivated), created date
-- Deactivate button → `PATCH /api/v1/admin/users/{user_id}/deactivate`
-  - Confirm with a dialog before calling
-  - On success: update the row's badge to "deactivated" or remove from list
+- Show: username, phone, role, `whatsapp_status` badge (live bridge state), `is_active` badge, created date
+- Actions:
+  - **Deactivate** → `PATCH /api/v1/admin/users/{user_id}/deactivate` — confirm with dialog
+  - **Activate** → `PATCH /api/v1/admin/users/{user_id}/activate` — shown only when `is_active === false`
+  - **Delete** → `DELETE /api/v1/admin/users/{user_id}` — confirm with dialog; permanent, cannot be undone
 
 ---
 

@@ -293,6 +293,31 @@ async def stop_propensity_scoring(
     return WhatsAppPropensityActionResponse(action='stop', enabled=False)
 
 
+# ── Poll tracking ─────────────────────────────────────────────────────────────
+
+@router.get('/polls')
+async def list_polls(
+    _: UserProfile = Depends(require_superadmin),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+    group_jid: str | None = Query(default=None, description='Filter by WhatsApp group JID'),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    offset = (page - 1) * page_size
+    result = await repository.query_polls(group_jid=group_jid, limit=page_size, offset=offset)
+    return {'total': result['total'], 'page': page, 'page_size': page_size, 'polls': result['rows']}
+
+
+@router.get('/polls/{poll_message_id}/votes')
+async def list_poll_votes(
+    poll_message_id: str,
+    _: UserProfile = Depends(require_superadmin),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
+) -> dict:
+    votes = await repository.query_poll_votes(poll_message_id)
+    return {'poll_message_id': poll_message_id, 'total_voters': len(votes), 'votes': votes}
+
+
 # ── User management ───────────────────────────────────────────────────────────
 
 @router.get('/users')

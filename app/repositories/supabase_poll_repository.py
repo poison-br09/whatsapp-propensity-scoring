@@ -125,6 +125,18 @@ class SupabasePollRepository:
             .execute()
         )
 
+    async def query_polls(
+        self,
+        *,
+        group_jid: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        return await asyncio.to_thread(self._query_polls, group_jid, limit, offset)
+
+    async def query_poll_votes(self, poll_message_id: str) -> list[dict]:
+        return await asyncio.to_thread(self._query_poll_votes, poll_message_id)
+
     async def get_active_keywords(self) -> list[dict[str, str]]:
         rows = await asyncio.to_thread(self._fetch_active_keywords)
         return [{'id': str(row['id']), 'keyword': str(row['keyword'])} for row in rows]
@@ -269,6 +281,30 @@ class SupabasePollRepository:
         rows = getattr(result, 'data', result) or []
         total = getattr(result, 'count', None) or 0
         return {'rows': rows, 'total': total}
+
+    def _query_polls(self, group_jid: str | None, limit: int, offset: int) -> dict:
+        client = self._get_client()
+        q = client.table(self._settings.supabase_whatsapp_poll_table).select(
+            'poll_message_id,poll_title,poll_options,group_jid,poll_created_at',
+            count='exact',
+        )
+        if group_jid:
+            q = q.eq('group_jid', group_jid)
+        result = q.order('poll_created_at', desc=True).range(offset, offset + limit - 1).execute()
+        rows = getattr(result, 'data', result) or []
+        total = getattr(result, 'count', None) or 0
+        return {'rows': rows, 'total': total}
+
+    def _query_poll_votes(self, poll_message_id: str) -> list[dict]:
+        result = (
+            self._get_client()
+            .table(self._settings.supabase_whatsapp_vote_snapshot_table)
+            .select('voter_jid,voter_phone,selected_options,normalized_vote,last_vote_timestamp')
+            .eq('poll_message_id', poll_message_id)
+            .order('last_vote_timestamp', desc=True)
+            .execute()
+        )
+        return getattr(result, 'data', result) or []
 
     def _fetch_active_keywords(self) -> list[Any]:
         result = (
