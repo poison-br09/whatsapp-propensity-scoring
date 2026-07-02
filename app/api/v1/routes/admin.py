@@ -72,6 +72,23 @@ async def _call_bridge_backfill(action: str, port: int, settings: Settings) -> W
     return WhatsAppBackfillActionResponse(action=action, accepted=True)
 
 
+async def _backfill_all_bridges(action: str, request: Request, settings: Settings) -> WhatsAppBackfillActionResponse:
+    pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail='Bridge pool is unavailable.')
+    bridges = pool.all_bridges()
+    if not bridges:
+        raise HTTPException(status_code=503, detail='No active bridges found.')
+    results = await asyncio.gather(
+        *[_call_bridge_backfill(action, bridge._backfill_port, settings) for bridge in bridges.values()],
+        return_exceptions=True,
+    )
+    failures = [r for r in results if isinstance(r, Exception)]
+    if failures:
+        logger.warning('Backfill %s: %d/%d bridges failed', action, len(failures), len(bridges))
+    return WhatsAppBackfillActionResponse(action=action, accepted=True)
+
+
 def _resolve_backfill_port(request: Request, current_user: UserProfile, settings: Settings) -> int:
     if current_user.role == 'superadmin':
         return settings.backfill_control_port
@@ -93,6 +110,8 @@ async def start_history_backfill(
     settings: Settings = Depends(get_settings),
 ) -> WhatsAppBackfillActionResponse:
     logger.info('Admin: start history backfill user_id=%s', current_user.user_id)
+    if current_user.role == 'superadmin':
+        return await _backfill_all_bridges('start', request, settings)
     port = _resolve_backfill_port(request, current_user, settings)
     return await _call_bridge_backfill('start', port, settings)
 
@@ -104,6 +123,8 @@ async def stop_history_backfill(
     settings: Settings = Depends(get_settings),
 ) -> WhatsAppBackfillActionResponse:
     logger.info('Admin: stop history backfill user_id=%s', current_user.user_id)
+    if current_user.role == 'superadmin':
+        return await _backfill_all_bridges('stop', request, settings)
     port = _resolve_backfill_port(request, current_user, settings)
     return await _call_bridge_backfill('stop', port, settings)
 
