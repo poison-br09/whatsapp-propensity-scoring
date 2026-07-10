@@ -6,6 +6,7 @@ class UserRegisterRequest(BaseModel):
     password: str = Field(min_length=8)
     whatsapp_phone: str | None = None
     target_group_jid: str | None = None
+    role: str = Field(default='user', description="'user' | 'admin'. Only superadmin can create 'admin' accounts.")
 
 
 class UserLoginRequest(BaseModel):

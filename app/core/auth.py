@@ -67,3 +67,11 @@ def require_superadmin(
     if current_user.role != 'superadmin':
         raise HTTPException(status_code=403, detail='Superadmin access required.')
     return current_user
+
+
+def require_admin(
+    current_user: UserProfile = Depends(get_current_user),
+) -> UserProfile:
+    if current_user.role not in ('admin', 'superadmin'):
+        raise HTTPException(status_code=403, detail='Admin access required.')
+    return current_user

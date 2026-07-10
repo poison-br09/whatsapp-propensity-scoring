@@ -4,7 +4,7 @@ import secrets
 from fastapi import Depends, HTTPException, Security
 from fastapi.security import APIKeyHeader
 
-from app.core.auth import get_current_user, require_superadmin
+from app.core.auth import get_current_user, require_admin, require_superadmin
 from app.core.config import Settings, get_settings
 from app.models.user import UserProfile
 from app.repositories.supabase_poll_repository import SupabasePollRepository
@@ -13,6 +13,7 @@ __all__ = [
     'require_api_key',
     'get_poll_repository',
     'get_current_user',
+    'require_admin',
     'require_superadmin',
     'UserProfile',
 ]

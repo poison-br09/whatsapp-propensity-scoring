@@ -169,8 +169,11 @@ class SupabasePollRepository:
     async def add_keywords(self, keywords: list[str]) -> list[dict]:
         return await asyncio.to_thread(self._add_keywords, keywords)
 
-    async def fetch_users(self) -> list[dict]:
-        return await asyncio.to_thread(self._fetch_users)
+    async def fetch_users(self, exclude_superadmin: bool = False) -> list[dict]:
+        return await asyncio.to_thread(self._fetch_users, exclude_superadmin)
+
+    async def set_user_role(self, user_id: str, role: str) -> dict | None:
+        return await asyncio.to_thread(self._set_user_role, user_id, role)
 
     async def deactivate_user_db(self, user_id: str) -> None:
         await asyncio.to_thread(self._deactivate_user, user_id)
@@ -185,15 +188,28 @@ class SupabasePollRepository:
         rows = await asyncio.to_thread(self._update_keywords_active, keywords, enabled)
         return [{'keyword': str(row['keyword']), 'enabled': str(row['is_active'])} for row in rows]
 
-    def _fetch_users(self) -> list[dict]:
-        result = (
+    def _fetch_users(self, exclude_superadmin: bool = False) -> list[dict]:
+        q = (
             self._get_client()
             .table(self._settings.supabase_users_table)
             .select('id,username,whatsapp_phone,target_group_jid,role,is_active,created_at')
             .order('created_at')
+        )
+        if exclude_superadmin:
+            q = q.neq('role', 'superadmin')
+        result = q.execute()
+        return getattr(result, 'data', result) or []
+
+    def _set_user_role(self, user_id: str, role: str) -> dict | None:
+        result = (
+            self._get_client()
+            .table(self._settings.supabase_users_table)
+            .update({'role': role})
+            .eq('id', user_id)
             .execute()
         )
-        return getattr(result, 'data', result) or []
+        rows = getattr(result, 'data', result) or []
+        return rows[0] if rows else None
 
     def _deactivate_user(self, user_id: str) -> None:
         (

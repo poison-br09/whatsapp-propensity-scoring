@@ -5,7 +5,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from supabase import create_client
 
-from app.core.auth import create_access_token, hash_password, require_superadmin, verify_password
+from app.core.auth import create_access_token, hash_password, require_admin, require_superadmin, verify_password
 from app.core.config import Settings, get_settings
 from app.models.user import UserLoginRequest, UserLoginResponse, UserProfile, UserRegisterRequest
 
@@ -22,17 +22,22 @@ def _get_supabase(settings: Settings):
 async def register(
     payload: UserRegisterRequest,
     request: Request,
-    _: UserProfile = Depends(require_superadmin),
+    current_user: UserProfile = Depends(require_admin),
 ) -> UserLoginResponse:
     settings = get_settings()
     normalized_phone = re.sub(r'\D', '', payload.whatsapp_phone) if payload.whatsapp_phone else None
+
+    # Admin can only create 'user' accounts; superadmin can also create 'admin' accounts.
+    requested_role = payload.role if payload.role in ('user', 'admin') else 'user'
+    if requested_role == 'admin' and current_user.role != 'superadmin':
+        raise HTTPException(status_code=403, detail='Only superadmin can create admin accounts.')
 
     def _insert():
         client = _get_supabase(settings)
         row_data: dict = {
             'username': payload.username,
             'password_hash': hash_password(payload.password),
-            'role': 'user',
+            'role': requested_role,
         }
         if normalized_phone:
             row_data['whatsapp_phone'] = normalized_phone
