@@ -72,6 +72,22 @@ async def _call_bridge_backfill(action: str, port: int, settings: Settings) -> W
     return WhatsAppBackfillActionResponse(action=action, accepted=True)
 
 
+async def _fetch_bridge_groups(port: int, settings: Settings) -> dict:
+    url = f'http://127.0.0.1:{port}/groups'
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                headers={'x-control-token': settings.whatsapp_internal_token or ''},
+                timeout=10.0,
+            )
+        if not response.is_success:
+            return {}
+        return response.json()
+    except Exception:
+        return {}
+
+
 async def _backfill_all_bridges(action: str, request: Request, settings: Settings) -> WhatsAppBackfillActionResponse:
     pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
     if pool is None:
@@ -338,6 +354,90 @@ async def list_poll_votes(
 ) -> dict:
     votes = await repository.query_poll_votes(poll_message_id)
     return {'poll_message_id': poll_message_id, 'total_voters': len(votes), 'votes': votes}
+
+
+# ── Group participants ────────────────────────────────────────────────────────
+
+@router.get('/groups')
+async def list_groups(
+    request: Request,
+    current_user: UserProfile = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail='Bridge pool is unavailable.')
+
+    if current_user.role == 'superadmin':
+        bridges = pool.all_bridges()
+        results = await asyncio.gather(*[
+            _fetch_bridge_groups(b._backfill_port, settings) for b in bridges.values()
+        ])
+        groups = []
+        for data in results:
+            receiver = data.get('receiver_phone')
+            for g in data.get('groups', []):
+                groups.append({'jid': g['jid'], 'name': g['name'], 'receiver_phone': receiver})
+        return {'groups': groups}
+
+    port = pool.get_backfill_port(current_user.user_id)
+    if port is None:
+        raise HTTPException(status_code=404, detail='No active bridge for this account.')
+    data = await _fetch_bridge_groups(port, settings)
+    groups = [{'jid': g['jid'], 'name': g['name']} for g in data.get('groups', [])]
+    return {'groups': groups}
+
+
+@router.get('/groups/participants/export')
+async def export_group_participants(
+    request: Request,
+    current_user: UserProfile = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+    group_name: list[str] = Query(default=[]),
+    user_id: list[str] = Query(default=[]),
+) -> StreamingResponse:
+    pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail='Bridge pool is unavailable.')
+
+    filter_groups = {n.lower() for n in group_name}
+
+    if current_user.role == 'superadmin':
+        bridges = pool.all_bridges()
+        if user_id:
+            bridges = {uid: b for uid, b in bridges.items() if uid in user_id}
+        datas = await asyncio.gather(*[
+            _fetch_bridge_groups(b._backfill_port, settings) for b in bridges.values()
+        ])
+    else:
+        port = pool.get_backfill_port(current_user.user_id)
+        if port is None:
+            raise HTTPException(status_code=404, detail='No active bridge for this account.')
+        datas = [await _fetch_bridge_groups(port, settings)]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Participants'
+    ws.append(['Phone Number', 'Name', 'WhatsApp Group', 'Login Number'])
+
+    for data in datas:
+        receiver = data.get('receiver_phone', '')
+        for group in data.get('groups', []):
+            gname = group.get('name') or ''
+            if filter_groups and gname.lower() not in filter_groups:
+                continue
+            for p in group.get('participants', []):
+                ws.append([p.get('phone'), p.get('name'), gname, receiver])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = 'group_participants.xlsx'
+    return StreamingResponse(
+        buf,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
 
 
 # ── User management ───────────────────────────────────────────────────────────

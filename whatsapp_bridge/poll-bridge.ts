@@ -68,6 +68,7 @@ const pollStore = new Map<string, WAMessage>()
 const syncedPolls = new Set<string>()
 const oldestGroupMessages = new Map<string, WAMessage>()
 const groupNameMap = new Map<string, string>()
+let groupsCache: Record<string, GroupMetadata> | null = null
 const pendingHistoryBackfills = new Map<string, Promise<void>>()
 
 let liveVoteProcessingEnabled = false
@@ -561,6 +562,7 @@ const logKnownGroups = (groups: Record<string, GroupMetadata>) => {
 }
 
 const cacheGroupNames = (groups: Record<string, GroupMetadata>) => {
+    groupsCache = groups
     for (const [jid, metadata] of Object.entries(groups)) {
         if (metadata.subject) {
             groupNameMap.set(jid, metadata.subject)
@@ -1012,6 +1014,25 @@ const startBackfillControlServer = () => {
             backfillEnabled = false
             res.writeHead(200)
             res.end(JSON.stringify({ action: 'stop', accepted: true }))
+        } else if (req.method === 'GET' && req.url === '/groups') {
+            const cache = groupsCache ?? {}
+            const groups = Object.entries(cache).map(([jid, metadata]) => ({
+                jid,
+                name: metadata.subject ?? null,
+                participants: (metadata.participants ?? []).map(p => {
+                    const rawJid = p.id ?? ''
+                    const userPart = rawJid.split('@')[0] ?? ''
+                    const phone = userPart.split(':')[0] ?? null
+                    const contact = globalContactCache.get(jidNormalizedUser(rawJid))
+                    return {
+                        jid: rawJid,
+                        phone: phone || null,
+                        name: contact?.name ?? null,
+                    }
+                }),
+            }))
+            res.writeHead(200)
+            res.end(JSON.stringify({ receiver_phone: normalizeVoterPhone(ownPnJid) ?? null, groups }))
         } else {
             res.writeHead(404)
             res.end(JSON.stringify({ error: 'Not found' }))
