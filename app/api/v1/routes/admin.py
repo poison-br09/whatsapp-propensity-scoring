@@ -88,11 +88,18 @@ async def _fetch_bridge_groups(port: int, settings: Settings) -> dict:
         return {}
 
 
-async def _backfill_all_bridges(action: str, request: Request, settings: Settings) -> WhatsAppBackfillActionResponse:
+async def _backfill_all_bridges(
+    action: str,
+    request: Request,
+    settings: Settings,
+    allowed_user_ids: set[str] | None = None,
+) -> WhatsAppBackfillActionResponse:
     pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
     if pool is None:
         raise HTTPException(status_code=503, detail='Bridge pool is unavailable.')
     bridges = pool.all_bridges()
+    if allowed_user_ids is not None:
+        bridges = {uid: b for uid, b in bridges.items() if uid in allowed_user_ids}
     if not bridges:
         raise HTTPException(status_code=503, detail='No active bridges found.')
     results = await asyncio.gather(
@@ -119,15 +126,24 @@ def _resolve_backfill_port(request: Request, current_user: UserProfile, settings
 
 # ── History backfill ──────────────────────────────────────────────────────────
 
+async def _user_role_bridge_ids(repository: SupabasePollRepository) -> set[str]:
+    users = await repository.fetch_users()
+    return {str(u['id']) for u in users if u.get('role') == 'user'}
+
+
 @router.post('/backfill/start', response_model=WhatsAppBackfillActionResponse)
 async def start_history_backfill(
     request: Request,
     current_user: UserProfile = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
 ) -> WhatsAppBackfillActionResponse:
     logger.info('Admin: start history backfill user_id=%s', current_user.user_id)
-    if current_user.role in ('superadmin', 'admin'):
+    if current_user.role == 'superadmin':
         return await _backfill_all_bridges('start', request, settings)
+    if current_user.role == 'admin':
+        allowed = await _user_role_bridge_ids(repository)
+        return await _backfill_all_bridges('start', request, settings, allowed_user_ids=allowed)
     port = _resolve_backfill_port(request, current_user, settings)
     return await _call_bridge_backfill('start', port, settings)
 
@@ -137,10 +153,14 @@ async def stop_history_backfill(
     request: Request,
     current_user: UserProfile = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
 ) -> WhatsAppBackfillActionResponse:
     logger.info('Admin: stop history backfill user_id=%s', current_user.user_id)
-    if current_user.role in ('superadmin', 'admin'):
+    if current_user.role == 'superadmin':
         return await _backfill_all_bridges('stop', request, settings)
+    if current_user.role == 'admin':
+        allowed = await _user_role_bridge_ids(repository)
+        return await _backfill_all_bridges('stop', request, settings, allowed_user_ids=allowed)
     port = _resolve_backfill_port(request, current_user, settings)
     return await _call_bridge_backfill('stop', port, settings)
 
@@ -363,6 +383,7 @@ async def list_groups(
     request: Request,
     current_user: UserProfile = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
 ) -> dict:
     pool: BridgePool | None = getattr(request.app.state, 'bridge_pool', None)
     if pool is None:
@@ -370,6 +391,9 @@ async def list_groups(
 
     if current_user.role in ('superadmin', 'admin'):
         bridges = pool.all_bridges()
+        if current_user.role == 'admin':
+            allowed = await _user_role_bridge_ids(repository)
+            bridges = {uid: b for uid, b in bridges.items() if uid in allowed}
         results = await asyncio.gather(*[
             _fetch_bridge_groups(b._backfill_port, settings) for b in bridges.values()
         ])
@@ -393,6 +417,7 @@ async def export_group_participants(
     request: Request,
     current_user: UserProfile = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
+    repository: SupabasePollRepository = Depends(get_poll_repository),
     group_name: list[str] = Query(default=[]),
     user_id: list[str] = Query(default=[]),
 ) -> StreamingResponse:
@@ -404,6 +429,9 @@ async def export_group_participants(
 
     if current_user.role in ('superadmin', 'admin'):
         bridges = pool.all_bridges()
+        if current_user.role == 'admin':
+            allowed = await _user_role_bridge_ids(repository)
+            bridges = {uid: b for uid, b in bridges.items() if uid in allowed}
         if user_id:
             bridges = {uid: b for uid, b in bridges.items() if uid in user_id}
         datas = await asyncio.gather(*[
