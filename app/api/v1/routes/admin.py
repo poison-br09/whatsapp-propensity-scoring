@@ -126,6 +126,14 @@ def _resolve_backfill_port(request: Request, current_user: UserProfile, settings
 
 # ── History backfill ──────────────────────────────────────────────────────────
 
+async def _user_role_phones(repository: SupabasePollRepository, extra_phone: str | None = None) -> list[str]:
+    users = await repository.fetch_users()
+    phones = [u['whatsapp_phone'] for u in users if u.get('role') == 'user' and u.get('whatsapp_phone')]
+    if extra_phone and extra_phone not in phones:
+        phones.append(extra_phone)
+    return phones
+
+
 async def _user_role_bridge_ids(repository: SupabasePollRepository) -> set[str]:
     users = await repository.fetch_users()
     return {str(u['id']) for u in users if u.get('role') == 'user'}
@@ -220,8 +228,13 @@ async def list_matches(
     page_size: int = Query(default=50, ge=1, le=500),
 ) -> dict:
     offset = (page - 1) * page_size
-    if current_user.role in ('superadmin', 'admin'):
-        receiver_phone = None
+    receiver_phone = None
+    receiver_phones = None
+
+    if current_user.role == 'superadmin':
+        pass  # no filter
+    elif current_user.role == 'admin':
+        receiver_phones = await _user_role_phones(repository, extra_phone=current_user.whatsapp_phone)
     elif current_user.whatsapp_phone:
         receiver_phone = current_user.whatsapp_phone
     else:
@@ -232,6 +245,7 @@ async def list_matches(
         date_from=date_from,
         date_to=date_to,
         receiver_phone=receiver_phone,
+        receiver_phones=receiver_phones,
         limit=page_size,
         offset=offset,
     )
@@ -246,11 +260,17 @@ async def export_matches(
     date_from: str | None = Query(default=None, description='ISO 8601, e.g. 2025-01-01T00:00:00Z'),
     date_to: str | None = Query(default=None, description='ISO 8601, e.g. 2025-12-31T23:59:59Z'),
 ) -> StreamingResponse:
-    if current_user.role in ('superadmin', 'admin'):
-        receiver_phone = None  # no filter — sees everything
+    if current_user.role == 'superadmin':
         result = await repository.query_matches(
             keywords=keyword, date_from=date_from, date_to=date_to,
-            receiver_phone=receiver_phone, limit=10000, offset=0,
+            limit=10000, offset=0,
+        )
+        rows = result['rows']
+    elif current_user.role == 'admin':
+        phones = await _user_role_phones(repository, extra_phone=current_user.whatsapp_phone)
+        result = await repository.query_matches(
+            keywords=keyword, date_from=date_from, date_to=date_to,
+            receiver_phones=phones, limit=10000, offset=0,
         )
         rows = result['rows']
     elif current_user.whatsapp_phone:
