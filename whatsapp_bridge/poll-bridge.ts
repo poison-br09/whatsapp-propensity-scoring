@@ -1021,12 +1021,19 @@ const startBackfillControlServer = () => {
                 name: metadata.subject ?? null,
                 participants: (metadata.participants ?? []).map(p => {
                     const rawJid = p.id ?? ''
-                    const userPart = rawJid.split('@')[0] ?? ''
-                    const phone = userPart.split(':')[0] ?? null
                     const contact = globalContactCache.get(jidNormalizedUser(rawJid))
+                    // @s.whatsapp.net JIDs encode the phone number directly.
+                    // @lid JIDs are WhatsApp's privacy identifiers — not phone numbers.
+                    let phone: string | null = null
+                    if (rawJid.endsWith('@s.whatsapp.net')) {
+                        const userPart = rawJid.split('@')[0] ?? ''
+                        phone = userPart.split(':')[0] || null
+                    } else {
+                        phone = contact?.phone ?? null
+                    }
                     return {
                         jid: rawJid,
-                        phone: phone || null,
+                        phone,
                         name: contact?.name ?? null,
                     }
                 }),
