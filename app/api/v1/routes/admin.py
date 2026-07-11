@@ -586,6 +586,11 @@ async def set_user_role(
     new_role = body.get('role', '')
     if new_role not in ('user', 'admin'):
         raise HTTPException(status_code=422, detail="role must be 'user' or 'admin'.")
+    target_role = await _fetch_target_role(user_id, repository)
+    if target_role is None:
+        raise HTTPException(status_code=404, detail='User not found.')
+    if target_role == 'superadmin':
+        raise HTTPException(status_code=403, detail='Cannot change the role of a superadmin.')
     row = await repository.set_user_role(user_id, new_role)
     if not row:
         raise HTTPException(status_code=404, detail='User not found.')

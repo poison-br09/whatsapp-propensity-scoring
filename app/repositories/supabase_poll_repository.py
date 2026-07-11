@@ -291,6 +291,8 @@ class SupabasePollRepository:
             normalized = [kw.lower().strip() for kw in keywords]
             q = q.in_('keyword', normalized)
         if receiver_phones is not None:
+            if not receiver_phones:
+                return {'rows': [], 'total': 0}
             q = q.in_('receiver_phone', receiver_phones)
         elif receiver_phone:
             q = q.eq('receiver_phone', receiver_phone.strip())

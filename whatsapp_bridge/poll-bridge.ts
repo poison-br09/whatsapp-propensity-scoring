@@ -69,6 +69,7 @@ const syncedPolls = new Set<string>()
 const oldestGroupMessages = new Map<string, WAMessage>()
 const groupNameMap = new Map<string, string>()
 let groupsCache: Record<string, GroupMetadata> | null = null
+let groupsCacheRefreshedAt = 0
 const pendingHistoryBackfills = new Map<string, Promise<void>>()
 
 let liveVoteProcessingEnabled = false
@@ -1015,10 +1016,12 @@ const startBackfillControlServer = () => {
             res.writeHead(200)
             res.end(JSON.stringify({ action: 'stop', accepted: true }))
         } else if (req.method === 'GET' && req.url === '/groups') {
-            if (activeSock) {
+            const GROUPS_CACHE_TTL_MS = 60_000
+            if (activeSock && Date.now() - groupsCacheRefreshedAt > GROUPS_CACHE_TTL_MS) {
                 try {
                     const fresh = await activeSock.groupFetchAllParticipating()
                     cacheGroupNames(fresh)
+                    groupsCacheRefreshedAt = Date.now()
                 } catch (err) {
                     logger.warn({ err }, 'failed to refresh groups cache on /groups request')
                 }
