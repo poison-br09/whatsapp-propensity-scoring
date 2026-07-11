@@ -985,7 +985,7 @@ const forwardChatMessages = async (
 }
 
 const startBackfillControlServer = () => {
-    const server = createServer((req, res) => {
+    const server = createServer(async (req, res) => {
         res.setHeader('Content-Type', 'application/json')
 
         const token = req.headers['x-control-token']
@@ -1015,6 +1015,14 @@ const startBackfillControlServer = () => {
             res.writeHead(200)
             res.end(JSON.stringify({ action: 'stop', accepted: true }))
         } else if (req.method === 'GET' && req.url === '/groups') {
+            if (activeSock) {
+                try {
+                    const fresh = await activeSock.groupFetchAllParticipating()
+                    cacheGroupNames(fresh)
+                } catch (err) {
+                    logger.warn({ err }, 'failed to refresh groups cache on /groups request')
+                }
+            }
             const cache = groupsCache ?? {}
             const groups = Object.entries(cache).map(([jid, metadata]) => ({
                 jid,
