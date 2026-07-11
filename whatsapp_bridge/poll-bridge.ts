@@ -632,7 +632,7 @@ const syncPollCreationMessage = async (
 
     await postInternal('/internal/whatsapp/poll-created', {
         group_jid: groupJid,
-        group_name: getGroupName(groupJid),
+        group_name: groupJid ? getGroupName(groupJid) : null,
         poll_message_id: message.key.id,
         poll_title: getPollTitle(message.message),
         poll_options: getPollOptions(message.message).map(option => option.optionName || ''),
