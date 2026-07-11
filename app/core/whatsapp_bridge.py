@@ -117,6 +117,18 @@ class BaileysBridgeProcessManager:
             self._stderr_handle.close()
             self._stderr_handle = None
 
+    def _pid_file(self) -> Path | None:
+        if self._auth_path is None:
+            return None
+        return self._auth_path / 'bridge.pid'
+
+    def _write_pid(self, pid: int) -> None:
+        pid_file = self._pid_file()
+        if pid_file is None:
+            return
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        pid_file.write_text(str(pid), encoding='utf-8')
+
     def _start_process(
         self,
         *,
@@ -133,7 +145,7 @@ class BaileysBridgeProcessManager:
         if not bridge_dir.exists() or not entrypoint.exists() or not tsx_cli.exists():
             raise RuntimeError(f'WhatsApp bridge files are missing under {bridge_dir}')
 
-        self._terminate_stale_bridge_processes(entrypoint)
+        self._terminate_stale_bridge_processes()
 
         auth_path = self._auth_path or self._settings.baileys_auth_path or (bridge_dir / 'baileys_auth_info')
         if reset_session and auth_path.exists():
@@ -186,52 +198,26 @@ class BaileysBridgeProcessManager:
             stderr=self._stderr_handle,
             text=True,
         )
+        self._write_pid(self._process.pid)
 
-    def _terminate_stale_bridge_processes(self, entrypoint: Path) -> None:
+    def _terminate_stale_bridge_processes(self) -> None:
+        pid_file = self._pid_file()
+        if pid_file is None or not pid_file.exists():
+            return
         try:
-            result = subprocess.run(
-                ['pgrep', '-f', str(entrypoint)],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            pid = int(pid_file.read_text(encoding='utf-8').strip())
+        except (ValueError, OSError):
+            return
+
+        if pid == os.getpid():
+            return
+        if self._process is not None and self._process.pid == pid:
+            return
+
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.info('Terminated stale WhatsApp bridge pid=%s from pid file', pid)
+        except ProcessLookupError:
+            pass
         except OSError as error:
-            logger.warning('Unable to inspect stale WhatsApp bridge processes: %s', error)
-            return
-
-        if result.returncode not in {0, 1}:
-            logger.warning(
-                'Failed to inspect stale WhatsApp bridge processes returncode=%s stderr=%s',
-                result.returncode,
-                result.stderr.strip(),
-            )
-            return
-
-        current_pid = os.getpid()
-        stale_pids = []
-        for raw_pid in result.stdout.splitlines():
-            raw_pid = raw_pid.strip()
-            if not raw_pid:
-                continue
-
-            try:
-                pid = int(raw_pid)
-            except ValueError:
-                continue
-
-            if pid == current_pid:
-                continue
-
-            if self._process is not None and self._process.pid == pid:
-                continue
-
-            stale_pids.append(pid)
-
-        for pid in stale_pids:
-            try:
-                os.kill(pid, signal.SIGTERM)
-                logger.info('Terminated stale WhatsApp bridge pid=%s', pid)
-            except ProcessLookupError:
-                continue
-            except OSError as error:
-                logger.warning('Failed to terminate stale WhatsApp bridge pid=%s error=%s', pid, error)
+            logger.warning('Failed to terminate stale WhatsApp bridge pid=%s error=%s', pid, error)
