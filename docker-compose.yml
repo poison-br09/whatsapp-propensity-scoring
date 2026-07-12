@@ -10,6 +10,7 @@ services:
       - "8000:8000"
     volumes:
       - ./logs:/app/logs
+      - ./whatsapp_auth:/app/whatsapp_auth
       - whatsapp_bridge_auth:/app/whatsapp_bridge/baileys_auth_info
     restart: unless-stopped
 

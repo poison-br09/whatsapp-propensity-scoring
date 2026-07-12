@@ -42,7 +42,7 @@ class BridgePool:
             self._settings,
             phone_number=whatsapp_phone,
             group_jid=target_group_jid,
-            auth_path=root / 'whatsapp_bridge' / f'baileys_auth_{user_id}',
+            auth_path=root / 'whatsapp_auth' / f'baileys_auth_{user_id}',
             log_path=root / 'logs' / user_id,
             backfill_port=self._settings.backfill_control_port + index,
         )
