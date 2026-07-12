@@ -1026,27 +1026,60 @@ const startBackfillControlServer = () => {
                     logger.warn({ err }, 'failed to refresh groups cache on /groups request')
                 }
             }
+
             const cache = groupsCache ?? {}
+
+            // Collect all @lid JIDs across every group and batch-resolve them in
+            // one authStateKeys.get call instead of one call per participant.
+            const lidReverseKeyToJid = new Map<string, string>()
+            for (const metadata of Object.values(cache)) {
+                for (const p of metadata.participants ?? []) {
+                    const rawJid = p.id ?? ''
+                    if (rawJid.endsWith('@lid') || rawJid.endsWith('@hosted.lid')) {
+                        const decoded = jidDecode(jidNormalizedUser(rawJid))
+                        if (decoded?.user) {
+                            lidReverseKeyToJid.set(`${decoded.user}_reverse`, rawJid)
+                        }
+                    }
+                }
+            }
+
+            const lidPhoneMap = new Map<string, string>()
+            if (authStateKeys && lidReverseKeyToJid.size > 0) {
+                try {
+                    const stored = await authStateKeys.get('lid-mapping', [...lidReverseKeyToJid.keys()])
+                    for (const [reverseKey, pnUser] of Object.entries(stored)) {
+                        if (typeof pnUser === 'string' && pnUser) {
+                            const rawJid = lidReverseKeyToJid.get(reverseKey)
+                            if (rawJid) {
+                                const decoded = jidDecode(jidNormalizedUser(rawJid))
+                                const deviceSuffix = decoded?.device ? `:${decoded.device}` : ''
+                                const phoneJid = `${pnUser}${deviceSuffix}@s.whatsapp.net`
+                                lidPhoneMap.set(rawJid, normalizeVoterPhone(phoneJid) ?? '')
+                            }
+                        }
+                    }
+                } catch (err) {
+                    logger.warn({ err }, 'failed to batch-resolve lid-mapping for group participants')
+                }
+            }
+
             const groups = Object.entries(cache).map(([jid, metadata]) => ({
                 jid,
                 name: metadata.subject ?? null,
                 participants: (metadata.participants ?? []).map(p => {
                     const rawJid = p.id ?? ''
                     const contact = globalContactCache.get(jidNormalizedUser(rawJid))
-                    // @s.whatsapp.net JIDs encode the phone number directly.
-                    // @lid JIDs are WhatsApp's privacy identifiers — not phone numbers.
                     let phone: string | null = null
                     if (rawJid.endsWith('@s.whatsapp.net')) {
                         const userPart = rawJid.split('@')[0] ?? ''
                         phone = userPart.split(':')[0] || null
+                    } else if (rawJid.endsWith('@lid') || rawJid.endsWith('@hosted.lid')) {
+                        phone = lidPhoneMap.get(rawJid) || contact?.phone || null
                     } else {
                         phone = contact?.phone ?? null
                     }
-                    return {
-                        jid: rawJid,
-                        phone,
-                        name: contact?.name ?? null,
-                    }
+                    return { jid: rawJid, phone: phone || null, name: contact?.name ?? null }
                 }),
             }))
             res.writeHead(200)
