@@ -35,6 +35,7 @@ baileys_auth_info/
 baileys_auth_*/
 **/baileys_auth_info/
 **/baileys_auth_*/
+whatsapp_auth/
 logs/
 **/logs/
 whatsapp_bridge/poll_store.json
